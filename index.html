@@ -2120,14 +2120,12 @@ function initControls(){
 
 
 
-
-  async function autoLoadHostedData() {
+async function autoLoadHostedData() {
   try {
+    // 1. Fetch the items data
     const itemRes = await fetch('./items.json');
     if (itemRes.ok) {
       const j = await itemRes.json();
-      console.log("Successfully parsed JSON data:", j); // Check your console for this!
-      
       const items = Array.isArray(j) ? j : (j.items || []);
       DATA = {
         source: j.source || "GitHub Pages Hosted", 
@@ -2135,11 +2133,13 @@ function initControls(){
         items: items, 
         seed: false
       };
-      reindex();
+      // Rebuild the data index with the new items
+      reindex(); 
     } else {
       console.warn("items.json not found. status:", itemRes.status);
     }
 
+    // 2. Fetch the character data
     const charRes = await fetch('./chardata.json');
     if (charRes.ok) {
       CHAR = await charRes.json();
@@ -2150,9 +2150,12 @@ function initControls(){
     console.error("Error processing hosted data:", err);
   }
   
+  // 3. INITIALIZE controls and RENDER only AFTER all data is perfectly loaded!
+  initControls();
   render();
 }
 
+// Kick off the auto-load
 autoLoadHostedData();
 </script>
 </body>
