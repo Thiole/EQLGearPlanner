@@ -1,0 +1,1718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EQ Legends — Gear &amp; Exaltation Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --void:#080b14; --panel:#111a2b; --panel2:#182338; --raised:#1f2c45;
+  --edge:#2b3a57; --edge2:#3d5079;
+  --bone:#e7e1d0; --dim:#8b96ad; --faint:#5d6880;
+  --brass:#c9a227; --brass-dim:#7d6519;
+  --arcane:#8b6cf0; --arcane-dim:#4a3a86;
+  --ok:#4f9d70; --bad:#c9544a; --warn:#d08b3c;
+  --mono:'IBM Plex Mono',ui-monospace,monospace;
+  --disp:'Cinzel',Georgia,serif;
+  --ui:'Inter',system-ui,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  background:
+    radial-gradient(1100px 600px at 15% -10%, #16233d 0%, transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, #1d1733 0%, transparent 55%),
+    var(--void);
+  color:var(--bone); font-family:var(--ui); font-size:14px; min-height:100vh;
+  -webkit-font-smoothing:antialiased;
+}
+button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:none}
+:focus-visible{outline:2px solid var(--brass);outline-offset:2px;border-radius:2px}
+
+/* ---------- added: char sheet / sort / tier ---------- */
+.sheet{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px;margin-top:4px}
+.sheet th{font-family:var(--ui);font-size:9px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--faint);font-weight:500;text-align:right;padding:3px 5px;border-bottom:1px solid var(--edge)}
+.sheet th:first-child{text-align:left}
+.sheet td{padding:2px 5px;text-align:right;border-bottom:1px solid rgba(43,58,87,.4)}
+.sheet td:first-child{text-align:left;color:var(--dim);font-family:var(--ui);font-size:11px}
+.sheet td.g{color:var(--faint)}
+.sheet td.gear{color:var(--arcane)}
+.sheet td.tot{color:var(--bone);font-weight:500}
+.sheet td.over{color:var(--warn)}
+.sheet tr.key td:first-child{color:var(--brass)}
+.badge{display:inline-block;font-size:8px;letter-spacing:.12em;text-transform:uppercase;
+  padding:2px 5px;border-radius:2px;border:1px solid var(--warn);color:var(--warn);margin-left:6px}
+.badge.ok{border-color:var(--ok);color:var(--ok)}
+.fbar{display:flex;gap:6px;align-items:center;padding:6px 0 2px}
+.fbar .fbtn{flex:1;text-align:left;background:var(--panel2);border:1px solid var(--edge);
+  padding:6px 9px;border-radius:3px;font-size:12px;color:var(--dim);display:flex;
+  justify-content:space-between;align-items:center;gap:8px}
+.fbar .fbtn:hover{border-color:var(--edge2)}
+.fbar .fbtn.on{border-color:var(--brass);color:var(--bone)}
+.fbar .fbtn .cnt{color:var(--brass);font-family:var(--mono);font-size:11px}
+.fbar .clr{border:1px solid var(--edge);border-radius:3px;padding:6px 8px;font-size:11px;color:var(--faint)}
+.fbar .clr:hover{color:var(--bad);border-color:var(--bad)}
+.zpanel{border:1px solid var(--edge);border-radius:3px;background:rgba(8,11,20,.5);
+  padding:8px;margin-bottom:6px}
+.zpanel input[type=search]{width:100%;margin-bottom:7px}
+.zlist{display:flex;flex-wrap:wrap;gap:4px;max-height:196px;overflow-y:auto}
+.zchip{border:1px solid var(--edge);border-radius:2px;padding:3px 7px;font-size:11px;
+  color:var(--dim);display:flex;gap:6px;align-items:center;white-space:nowrap}
+.zchip:hover{border-color:var(--edge2);color:var(--bone)}
+.zchip.on{background:var(--brass-dim);border-color:var(--brass);color:var(--bone)}
+.zchip .n{font-family:var(--mono);font-size:10px;color:var(--faint)}
+.zchip.on .n{color:var(--bone)}
+.zchip.dim{opacity:.45}
+.zmore{font-size:10px;color:var(--faint);padding:4px 2px;width:100%}
+.sortbar{display:flex;gap:6px;align-items:center;padding:8px 0 4px}
+.sortbar label{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.sortbar select{flex:1;min-width:0}
+.xpbar{display:flex;gap:6px;align-items:center;margin-top:8px;font-family:var(--mono);font-size:11px}
+.xpbar input[type=range]{flex:1;accent-color:var(--brass)}
+.xpbar .xpv{color:var(--brass);min-width:74px;text-align:right}
+.tierpick{display:flex;flex-wrap:wrap;gap:3px}
+.tierpick button{background:var(--panel2);border:1px solid var(--edge);color:var(--dim);
+  font-size:10px;font-family:var(--mono);padding:3px 6px;border-radius:2px}
+.tierpick button.on{background:var(--brass-dim);border-color:var(--brass);color:var(--bone)}
+.tierpick button.gated{opacity:.55}
+.delta{color:var(--ok)}
+.delta.neg{color:var(--bad)}
+
+/* ---------- header ---------- */
+header{
+  border-bottom:1px solid var(--edge);
+  background:linear-gradient(180deg,rgba(20,30,50,.95),rgba(8,11,20,.7));
+  padding:14px 22px; display:flex; gap:22px; align-items:center; flex-wrap:wrap;
+  position:sticky; top:0; z-index:40; backdrop-filter:blur(8px);
+}
+.brand{font-family:var(--disp);font-weight:700;font-size:19px;letter-spacing:.06em;
+  color:var(--bone); white-space:nowrap}
+.brand span{color:var(--brass)}
+.tagline{font-size:11px;color:var(--faint);letter-spacing:.14em;text-transform:uppercase;
+  border-left:1px solid var(--edge);padding-left:14px}
+.hdr-right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+
+.ctl{display:flex;flex-direction:column;gap:3px}
+.ctl label{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+select,input[type=search]{
+  background:var(--panel2);border:1px solid var(--edge);color:var(--bone);
+  padding:6px 8px;border-radius:3px;font-family:var(--ui);font-size:12px;min-width:96px;
+}
+select:hover{border-color:var(--edge2)}
+
+.btn{
+  background:var(--raised);border:1px solid var(--edge2);padding:7px 12px;border-radius:3px;
+  font-size:12px;font-weight:500;letter-spacing:.03em;transition:.15s;
+}
+.btn:hover{background:var(--edge);border-color:var(--brass-dim)}
+.btn-brass{border-color:var(--brass-dim);color:var(--brass)}
+.btn-brass:hover{background:#2a2410}
+
+/* ---------- layout ---------- */
+.wrap{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:22px;
+  padding:22px;max-width:1500px;margin:0 auto;align-items:start}
+@media(max-width:1080px){.wrap{grid-template-columns:1fr}}
+
+.card{background:linear-gradient(180deg,var(--panel),#0d1523);
+  border:1px solid var(--edge);border-radius:5px}
+.card-h{padding:10px 14px;border-bottom:1px solid var(--edge);
+  display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.015)}
+.card-h h2{font-family:var(--disp);font-size:13px;letter-spacing:.1em;font-weight:500;
+  text-transform:uppercase;color:var(--bone)}
+.card-h .sub{font-size:10px;color:var(--faint);margin-left:auto;letter-spacing:.08em}
+
+/* ---------- paper doll ---------- */
+.doll{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;padding:14px}
+@media(max-width:560px){.doll{grid-template-columns:repeat(2,1fr)}}
+
+.slot{
+  position:relative;background:var(--panel2);border:1px solid var(--edge);
+  border-radius:3px;padding:7px 8px;min-height:60px;text-align:left;
+  display:flex;flex-direction:column;gap:3px;transition:.13s;overflow:hidden;
+}
+.slot:hover{border-color:var(--edge2);background:var(--raised);transform:translateY(-1px)}
+.slot.sel{border-color:var(--brass);box-shadow:0 0 0 1px var(--brass-dim),0 0 18px -6px var(--brass)}
+.slot.filled{background:linear-gradient(150deg,var(--raised),#141d30)}
+.slot.any{border-style:dashed;border-color:var(--arcane-dim)}
+.slot.any.filled{border-style:solid}
+.slot.bad{border-color:var(--bad);box-shadow:0 0 0 1px rgba(201,84,74,.4)}
+.slot-name{font-size:8.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--faint)}
+.slot.filled .slot-name{color:var(--brass-dim)}
+.slot-item{font-size:11.5px;line-height:1.25;color:var(--bone);font-weight:500}
+.slot-empty{font-size:11px;color:#39425a;font-style:italic}
+.slot-meta{display:flex;gap:4px;align-items:center;margin-top:auto;flex-wrap:wrap}
+.lvl{font-family:var(--mono);font-size:9px;color:var(--brass);border:1px solid var(--brass-dim);
+  border-radius:2px;padding:0 3px}
+.gems{display:flex;gap:2px}
+.gem{width:5px;height:5px;border-radius:50%;background:#2a3450;border:1px solid #38456a}
+.gem.on{background:var(--arcane);border-color:var(--arcane);box-shadow:0 0 5px var(--arcane)}
+.gem.on.orn{background:var(--brass);border-color:var(--brass);box-shadow:0 0 5px var(--brass)}
+.flag{font-size:8px;letter-spacing:.1em;padding:0 3px;border-radius:2px;
+  border:1px solid currentColor;text-transform:uppercase}
+.flag.lore{color:var(--warn)} .flag.err{color:var(--bad)}
+
+/* ---------- rules log ---------- */
+.log{padding:10px 14px;display:flex;flex-direction:column;gap:6px;max-height:230px;overflow:auto}
+.issue{display:flex;gap:8px;font-size:11.5px;line-height:1.45;padding:7px 9px;
+  border-radius:3px;border-left:2px solid;background:rgba(255,255,255,.02)}
+.issue.err{border-color:var(--bad);color:#f0b5af}
+.issue.warn{border-color:var(--warn);color:#e8c48f}
+.issue.ok{border-color:var(--ok);color:#9ed4b4}
+.issue b{color:var(--bone);font-weight:600}
+.issue .ico{font-family:var(--mono);opacity:.8}
+
+/* ---------- totals ---------- */
+.totals{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:1px;
+  background:var(--edge);border-top:1px solid var(--edge)}
+.tot{background:var(--panel);padding:7px 9px}
+.tot dt{font-size:8.5px;letter-spacing:.13em;color:var(--faint);text-transform:uppercase}
+.tot dd{font-family:var(--mono);font-size:14px;color:var(--bone);margin-top:1px}
+.tot dd.z{color:#39425a}
+
+/* ---------- drawer ---------- */
+.drawer{position:sticky;top:82px}
+.drawer-body{max-height:calc(100vh - 140px);overflow:auto}
+.search{padding:9px 12px;border-bottom:1px solid var(--edge)}
+.chips{display:flex;gap:4px;padding:0 12px 9px;flex-wrap:wrap}
+.chip{font-size:10px;letter-spacing:.06em;padding:3px 8px;border-radius:10px;
+  border:1px solid var(--edge2);color:var(--faint);background:var(--panel)}
+.chip:hover{color:var(--bone)}
+.chip.on{background:var(--brass);color:#1a1405;border-color:var(--brass);font-weight:600}
+.search input{width:100%}
+
+.row{display:flex;flex-direction:column;gap:4px;padding:9px 13px;
+  border-bottom:1px solid rgba(43,58,87,.5);cursor:pointer;text-align:left;width:100%;transition:.1s}
+.row:hover{background:var(--panel2)}
+.row.ineligible{opacity:.42}
+.row.ineligible:hover{opacity:.7}
+.row-top{display:flex;gap:8px;align-items:baseline}
+.row-name{font-size:12.5px;font-weight:500;flex:1}
+.row-stat{font-family:var(--mono);font-size:10.5px;color:var(--dim);white-space:nowrap}
+.row-sub{font-size:10.5px;color:var(--faint);line-height:1.4}
+.row-drop{font-size:10px;color:var(--brass-dim)}
+.row-drop b{color:var(--brass);font-weight:500}
+.pill{font-size:8px;letter-spacing:.09em;text-transform:uppercase;padding:1px 4px;
+  border-radius:2px;border:1px solid;white-space:nowrap}
+.pill.lore{color:var(--warn);border-color:var(--warn)}
+.pill.magic{color:#6f9fd0;border-color:#3d5f80}
+.pill.quest{color:var(--ok);border-color:#2f6047}
+.pill.no{color:var(--bad);border-color:#7a3630}
+.pill.foc{color:var(--arcane);border-color:var(--arcane-dim)}
+.pill.craft{color:#5fb0a8;border-color:#2f6b66}
+.pill.ooe{color:#e0685c;border-color:#8f3a32;background:rgba(224,104,92,.08)}
+.pill.chg{color:#d8a548;border-color:#7a5f22}
+.chip.era.on{background:var(--ok);color:#08160e;border-color:var(--ok)}
+.pill.vend{color:#9a8fb8;border-color:#4d4470}
+
+.empty{padding:30px 18px;text-align:center;color:var(--faint);font-size:12px;line-height:1.6}
+.empty b{display:block;font-family:var(--disp);color:var(--dim);font-size:13px;
+  letter-spacing:.08em;margin-bottom:6px}
+
+/* ---------- item tooltip (the EQ item window) ---------- */
+.tip{margin:12px;border:1px solid var(--brass-dim);border-radius:3px;
+  background:linear-gradient(165deg,#1b1608,#0f1420 60%);padding:11px 13px}
+.tip-name{font-family:var(--disp);font-size:14px;color:var(--brass);letter-spacing:.05em;
+  margin-bottom:7px}
+.tip pre{font-family:var(--mono);font-size:11px;line-height:1.65;color:var(--bone);
+  white-space:pre-wrap;word-break:break-word}
+.tip .t-tag{color:var(--warn)} .tip .t-key{color:var(--dim)}
+.tip .t-eff{color:var(--arcane)} .tip .t-foc{color:#6fb0d8}
+
+/* ---------- exaltation rail (signature) ---------- */
+.rail{margin:12px;border:1px solid var(--edge);border-radius:4px;overflow:hidden}
+.rail-h{padding:9px 12px;background:var(--panel2);border-bottom:1px solid var(--edge);
+  display:flex;align-items:center;gap:10px}
+.rail-h h3{font-family:var(--disp);font-size:11px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--dim);font-weight:500}
+.lvlpick{margin-left:auto;display:flex;gap:2px}
+.lvlpick button{font-family:var(--mono);font-size:10px;padding:2px 6px;border:1px solid var(--edge2);
+  border-radius:2px;color:var(--faint);background:var(--panel)}
+.lvlpick button:hover{color:var(--bone);border-color:var(--brass-dim)}
+.lvlpick button.on{background:var(--brass);color:#1a1405;border-color:var(--brass);font-weight:500}
+
+.exalt{display:flex;gap:10px;align-items:center;padding:9px 12px;
+  border-bottom:1px solid rgba(43,58,87,.45);width:100%;text-align:left;transition:.12s}
+.exalt:last-child{border-bottom:none}
+.exalt:not(.locked){cursor:pointer}
+.exalt:not(.locked):hover{background:var(--panel2)}
+.exalt.locked{opacity:.4;cursor:not-allowed}
+.socket{width:22px;height:22px;flex:none;border-radius:50%;border:1px solid var(--edge2);
+  background:#0c1220;display:grid;place-items:center;font-size:9px;color:var(--faint);
+  font-family:var(--mono);position:relative}
+.exalt.open .socket{border-color:var(--arcane-dim);box-shadow:inset 0 0 6px rgba(139,108,240,.25)}
+.exalt.set .socket{background:radial-gradient(circle at 35% 30%,#b9a0ff,var(--arcane));
+  border-color:var(--arcane);box-shadow:0 0 9px -1px var(--arcane);color:transparent}
+.exalt.set.orn-s .socket{background:radial-gradient(circle at 35% 30%,#f0dc94,var(--brass));
+  border-color:var(--brass);box-shadow:0 0 9px -1px var(--brass)}
+.ex-txt{flex:1;min-width:0}
+.ex-type{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.ex-val{font-size:11.5px;color:var(--bone);margin-top:1px;line-height:1.35}
+.ex-val.none{color:#39425a;font-style:italic}
+.ex-req{font-family:var(--mono);font-size:9.5px;color:var(--faint);white-space:nowrap}
+.ex-clear{font-size:9px;color:var(--faint);padding:2px 5px;border:1px solid var(--edge);
+  border-radius:2px}
+.ex-clear:hover{color:var(--bad);border-color:var(--bad)}
+
+.note{margin:0 12px 12px;padding:8px 10px;border-radius:3px;font-size:11px;line-height:1.55;
+  background:rgba(139,108,240,.07);border-left:2px solid var(--arcane-dim);color:#b9abe8}
+.note b{color:#d6cbff}
+.note.warn{background:rgba(208,139,60,.07);border-color:var(--warn);color:#e8c48f}
+.note.warn b{color:#f3dcb4}
+
+.back{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--faint);
+  padding:8px 13px;border-bottom:1px solid var(--edge);width:100%;text-align:left}
+.back:hover{color:var(--brass)}
+
+.data-note{padding:11px 14px;font-size:10.5px;line-height:1.6;color:var(--faint);
+  border-top:1px solid var(--edge);background:rgba(0,0,0,.2)}
+.data-note b{color:var(--dim)}
+.data-note code{font-family:var(--mono);color:var(--brass-dim);font-size:10px}
+a{color:var(--brass-dim)}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">EQ<span>L</span> Gear Planner</div>
+  <div class="tagline">Exaltation &amp; loadout modelling</div>
+  <div class="hdr-right">
+    <div class="ctl"><label for="c1">Class 1</label><select id="c1"></select></div>
+    <div class="ctl"><label for="c2">Class 2</label><select id="c2"></select></div>
+    <div class="ctl"><label for="c3">Class 3</label><select id="c3"></select></div>
+    <div class="ctl"><label for="race">Race</label><select id="race"></select></div>
+    <button class="btn btn-brass" id="load">Load item data</button>
+    <button class="btn" id="loadchar" title="Override the built-in race/class attribute table">Load char data</button>
+    <input type="file" id="file" accept=".json" hidden>
+    <input type="file" id="charfile" accept=".json" hidden>
+  </div>
+</header>
+
+<div class="wrap">
+  <div>
+    <section class="card">
+      <div class="card-h">
+        <h2>Loadout</h2>
+        <div class="sub" id="dollsub">click a slot to fit gear</div>
+      </div>
+      <div class="doll" id="doll"></div>
+      <dl class="totals" id="totals"></dl>
+      <div class="data-note" id="zonesum"></div>
+    </section>
+
+    <section class="card">
+      <div class="card-h"><h2>Character</h2><div class="sub" id="charsub"></div></div>
+      <div id="charsheet"></div>
+    </section>
+
+    <section class="card" style="margin-top:18px">
+      <div class="card-h"><h2>Rules check</h2><div class="sub" id="logsub"></div></div>
+      <div class="log" id="log"></div>
+    </section>
+
+    <section class="card" style="margin-top:18px">
+      <div class="data-note" id="datanote"></div>
+    </section>
+  </div>
+
+  <aside class="card drawer">
+    <div class="card-h"><h2 id="dtitle">Browser</h2><div class="sub" id="dsub"></div></div>
+    <div class="drawer-body" id="drawer"></div>
+  </aside>
+</div>
+
+<script>
+/* ============================================================
+   EQ Legends Gear & Exaltation Planner
+   Mechanics sourced from eqlwiki.com/Exaltations + patch notes.
+   ============================================================ */
+
+const CLASSES = {WAR:"Warrior",CLR:"Cleric",PAL:"Paladin",RNG:"Ranger",SHD:"Shadow Knight",
+  DRU:"Druid",MNK:"Monk",BRD:"Bard",ROG:"Rogue",SHM:"Shaman",NEC:"Necromancer",
+  WIZ:"Wizard",MAG:"Magician",ENC:"Enchanter",BST:"Beastlord",BER:"Berserker"};
+const RACES = {ALL:"— any —",HUM:"Human",BAR:"Barbarian",ERU:"Erudite",ELF:"Wood Elf",
+  HIE:"High Elf",DEF:"Dark Elf",HFL:"Halfling",DWF:"Dwarf",TRL:"Troll",OGR:"Ogre",
+  GNM:"Gnome",IKS:"Iksar",VAH:"Vah Shir",FRG:"Froglok",HEF:"Half Elf"};
+
+/* Equipment slots. `accepts` = the wiki's "Slot:" token for that position.
+   ANY1/ANY2 are EQL's flex slots — confirmed by patch notes (backstab from
+   "Primary, Secondary, or either Any slot") and Cald's Newbie Guide
+   (breastplate or shields placed into Any slots). */
+const SLOTS = [
+  {k:"EAR1",n:"Ear",a:"EAR"},        {k:"HEAD",n:"Head",a:"HEAD"},
+  {k:"FACE",n:"Face",a:"FACE"},      {k:"EAR2",n:"Ear",a:"EAR"},
+  {k:"NECK",n:"Neck",a:"NECK"},      {k:"SHOULDERS",n:"Shoulders",a:"SHOULDERS"},
+  {k:"ARMS",n:"Arms",a:"ARMS"},      {k:"BACK",n:"Back",a:"BACK"},
+  {k:"WRIST1",n:"Wrist",a:"WRIST"},  {k:"WRIST2",n:"Wrist",a:"WRIST"},
+  {k:"RANGE",n:"Range",a:"RANGE"},   {k:"HANDS",n:"Hands",a:"HANDS"},
+  {k:"PRIMARY",n:"Primary",a:"PRIMARY"},   {k:"SECONDARY",n:"Secondary",a:"SECONDARY"},
+  {k:"FINGER1",n:"Finger",a:"FINGER"},     {k:"FINGER2",n:"Finger",a:"FINGER"},
+  {k:"CHEST",n:"Chest",a:"CHEST"},   {k:"LEGS",n:"Legs",a:"LEGS"},
+  {k:"FEET",n:"Feet",a:"FEET"},      {k:"WAIST",n:"Waist",a:"WAIST"},
+  {k:"AMMO",n:"Ammo",a:"AMMO"},
+  {k:"ANY1",n:"Any",a:"*"},          {k:"ANY2",n:"Any",a:"*"},
+];
+
+/* Exaltation slot types — unlock thresholds from eqlwiki.com/Exaltations */
+const EXALTS = [
+  {k:"ornament",n:"Ornamentation",req:0,src:null,
+   note:"Cosmetic only. Uses an Ornamentation Token, not a duplicate item. Visible gear only."},
+  {k:"focus",n:"Focus",req:1,src:"focus"},
+  {k:"click",n:"Click",req:2,src:"click"},
+  {k:"worn",n:"Worn",req:3,src:"worn"},
+  {k:"proc",n:"Proc",req:4,src:"proc"},
+];
+
+/* ============================================================
+   ITEM TIERS 0-10
+   Source: eqlwiki.com/Item_Upgrade_System.
+
+   These are NOT scraped, and there is nothing to scrape — every item page on
+   the wiki carries one stat block, at tier 0. Tiers are *computed*:
+
+     - each tier is a cumulative +10% to the item's stats
+     - the bonus tracks item XP, not the tier number, so it creeps up mid-tier
+     - everything rounds down
+     - a minimum +1 per stat is guaranteed at the *start of each tier* only;
+       mid-tier creep does not get it
+     - weight shrinks the same way, floor 0.1; damage scales, delay never does
+
+   Verified against the wiki's own worked example (Umbral Platemail Breastplate,
+   AC 30 -> 33 at T1 -> 34 at T1+1xp -> 36 at T2).
+   ============================================================ */
+const TIER_XP   = [0,1,3,7,15,31,63,127,255,511,1023];   // total xp to sit at tier N
+const TIER_NEXT = [1,2,4,8,16,32,64,128,256,512,null];   // xp from tier N to N+1
+const MAX_XP = 1023;
+
+/* What one merge is worth. Gear gives the xp it took to reach its own tier;
+   motes give a fixed amount but refuse to feed an item above their cap. */
+const MOTES = [
+  {n:"Infinitesimal",max:0,xp:1},  {n:"Minor",max:1,xp:1},   {n:"Lesser",max:2,xp:2},
+  {n:"Potential",max:3,xp:4},      {n:"Major",max:4,xp:5},   {n:"Greater",max:5,xp:6},
+  {n:"Superior",max:6,xp:7},       {n:"Grand",max:7,xp:8},   {n:"Ascendant",max:8,xp:9},
+  {n:"Infinite",max:9,xp:10},
+];
+
+const tierOf = xp => { let t = 0; for(let i=0;i<11;i++) if(xp >= TIER_XP[i]) t = i; return t; };
+
+/** cumulative stat bonus as a fraction, e.g. 0.15 for +15% */
+function cumBonus(xp){
+  const t = tierOf(xp);
+  if(t >= 10) return 1;
+  const into = xp - TIER_XP[t], need = TIER_NEXT[t];
+  return (t*10 + (into/need*100)/10) / 100;
+}
+
+/** one stat, tier-0 value -> value at this xp */
+function scaleStat(v, xp){
+  if(!v) return v;
+  const t = tierOf(xp), cum = cumBonus(xp);
+  if(v > 0){
+    const atTier = Math.max(Math.floor(v * (1 + t/10)), v + t);  // +1/tier guarantee
+    return Math.max(atTier, Math.floor(v * (1 + cum)));          // mid-tier creep
+  }
+  /* UNVERIFIED: the wiki publishes no negative-stat example. It says the +1 is a
+     bonus and that everything rounds down; applied literally that deepens a
+     penalty as you upgrade. That is what this does. If you see otherwise
+     in-game, this is the line to change. */
+  return -Math.floor(Math.abs(v) * (1 + cum));
+}
+
+function scaledItem(item, xp){
+  const stats = {};
+  for(const [k,v] of Object.entries(item.stats||{})) stats[k] = scaleStat(v, xp);
+  const o = {stats, tier:tierOf(xp), xp, cum:cumBonus(xp)};
+  if(item.dmg) o.dmg = scaleStat(item.dmg, xp);
+  if(item.delay) o.delay = item.delay;                 // never scales
+  if(item.wt != null) o.wt = Math.max(0.1, Math.round(item.wt * (1 - cumBonus(xp)) * 10) / 10);
+  return o;
+}
+
+/* ============================================================
+   CHARACTER ATTRIBUTES
+   Default table below is a copy of chardata.json — the planner has to work as
+   a single file off file://, so it can't fetch it. "Load char data" overrides.
+   Read chardata.json's _README before trusting these numbers.
+   ============================================================ */
+const CHAR_DEFAULT = {
+ "_README": [
+  "Race base attributes and per-class attribute adds for the EQ Legends gear planner.",
+  "",
+  "PROVENANCE \u2014 READ THIS.",
+  "eqlwiki.com does NOT publish these numbers. Its Character_Races page lists racials,",
+  "starting cities and class options only, and is flagged 'outdated' by its own editors.",
+  "There is nothing to scrape. So these values are CLASSIC EVERQUEST values, carried",
+  "over on the assumption that EQL reuses them. That assumption is UNVERIFIED.",
+  "",
+  "One thing here IS verified: every class adds exactly 30 points, so a trio is worth 90",
+  "to any race (eqltools.com/attributes, read from the game client). The planner asserts",
+  "that invariant on load and will shout if you break it while editing.",
+  "",
+  "TO FIX: make a character, open your stat window before equipping anything, and compare.",
+  "Correct the numbers here and set \"verified\": true \u2014 the planner reads this file, so",
+  "this is the only place you need to touch. Race base = your naked stats minus the three",
+  "class adds.",
+  "",
+  "EQL has no point allocation at creation, so race + 3 classes fully determines the",
+  "starting sheet. Players report a soft ceiling of 150 per attribute (unconfirmed);",
+  "the planner marks anything over it rather than clamping."
+ ],
+ "verified": false,
+ "attr_cap": 150,
+ "class_add_total": 30,
+ "races": {
+  "HUM": {
+   "name": "Human",
+   "STR": 75,
+   "STA": 75,
+   "AGI": 75,
+   "DEX": 75,
+   "WIS": 75,
+   "INT": 75,
+   "CHA": 75
+  },
+  "BAR": {
+   "name": "Barbarian",
+   "STR": 103,
+   "STA": 95,
+   "AGI": 82,
+   "DEX": 70,
+   "WIS": 70,
+   "INT": 60,
+   "CHA": 55
+  },
+  "ERU": {
+   "name": "Erudite",
+   "STR": 60,
+   "STA": 70,
+   "AGI": 70,
+   "DEX": 70,
+   "WIS": 83,
+   "INT": 107,
+   "CHA": 70
+  },
+  "ELF": {
+   "name": "Wood Elf",
+   "STR": 65,
+   "STA": 65,
+   "AGI": 95,
+   "DEX": 80,
+   "WIS": 80,
+   "INT": 75,
+   "CHA": 75
+  },
+  "HIE": {
+   "name": "High Elf",
+   "STR": 55,
+   "STA": 65,
+   "AGI": 85,
+   "DEX": 70,
+   "WIS": 95,
+   "INT": 92,
+   "CHA": 80
+  },
+  "DEF": {
+   "name": "Dark Elf",
+   "STR": 60,
+   "STA": 65,
+   "AGI": 90,
+   "DEX": 75,
+   "WIS": 83,
+   "INT": 99,
+   "CHA": 60
+  },
+  "HEF": {
+   "name": "Half Elf",
+   "STR": 70,
+   "STA": 70,
+   "AGI": 90,
+   "DEX": 85,
+   "WIS": 60,
+   "INT": 75,
+   "CHA": 75
+  },
+  "DWF": {
+   "name": "Dwarf",
+   "STR": 90,
+   "STA": 90,
+   "AGI": 70,
+   "DEX": 90,
+   "WIS": 83,
+   "INT": 60,
+   "CHA": 45
+  },
+  "TRL": {
+   "name": "Troll",
+   "STR": 108,
+   "STA": 109,
+   "AGI": 83,
+   "DEX": 75,
+   "WIS": 60,
+   "INT": 52,
+   "CHA": 40
+  },
+  "OGR": {
+   "name": "Ogre",
+   "STR": 130,
+   "STA": 132,
+   "AGI": 70,
+   "DEX": 70,
+   "WIS": 67,
+   "INT": 60,
+   "CHA": 37
+  },
+  "HFL": {
+   "name": "Halfling",
+   "STR": 70,
+   "STA": 75,
+   "AGI": 95,
+   "DEX": 90,
+   "WIS": 80,
+   "INT": 67,
+   "CHA": 50
+  },
+  "GNM": {
+   "name": "Gnome",
+   "STR": 60,
+   "STA": 70,
+   "AGI": 85,
+   "DEX": 85,
+   "WIS": 67,
+   "INT": 98,
+   "CHA": 60
+  },
+  "IKS": {
+   "name": "Iksar",
+   "STR": 70,
+   "STA": 70,
+   "AGI": 90,
+   "DEX": 85,
+   "WIS": 80,
+   "INT": 75,
+   "CHA": 55
+  },
+  "VAH": {
+   "name": "Kerran",
+   "STR": 90,
+   "STA": 75,
+   "AGI": 90,
+   "DEX": 70,
+   "WIS": 70,
+   "INT": 65,
+   "CHA": 65
+  },
+  "FRG": {
+   "name": "Froglok",
+   "STR": 70,
+   "STA": 80,
+   "AGI": 100,
+   "DEX": 85,
+   "WIS": 75,
+   "INT": 75,
+   "CHA": 50
+  }
+ },
+ "classes": {
+  "WAR": {
+   "STR": 10,
+   "STA": 10,
+   "AGI": 5,
+   "DEX": 5
+  },
+  "CLR": {
+   "STR": 5,
+   "STA": 5,
+   "AGI": 5,
+   "WIS": 10,
+   "CHA": 5
+  },
+  "PAL": {
+   "STR": 10,
+   "STA": 5,
+   "WIS": 5,
+   "CHA": 10
+  },
+  "RNG": {
+   "STR": 5,
+   "STA": 10,
+   "AGI": 10,
+   "WIS": 5
+  },
+  "SHD": {
+   "STR": 10,
+   "STA": 5,
+   "INT": 10,
+   "CHA": 5
+  },
+  "DRU": {
+   "STA": 10,
+   "AGI": 5,
+   "WIS": 10,
+   "CHA": 5
+  },
+  "MNK": {
+   "STR": 5,
+   "STA": 5,
+   "AGI": 10,
+   "DEX": 10
+  },
+  "BRD": {
+   "STR": 5,
+   "DEX": 10,
+   "INT": 5,
+   "CHA": 10
+  },
+  "ROG": {
+   "STR": 5,
+   "STA": 5,
+   "AGI": 10,
+   "DEX": 10
+  },
+  "SHM": {
+   "STA": 5,
+   "AGI": 5,
+   "DEX": 5,
+   "WIS": 10,
+   "CHA": 5
+  },
+  "NEC": {
+   "STA": 5,
+   "AGI": 5,
+   "DEX": 10,
+   "INT": 10
+  },
+  "WIZ": {
+   "STA": 10,
+   "AGI": 5,
+   "DEX": 5,
+   "INT": 10
+  },
+  "MAG": {
+   "STA": 10,
+   "AGI": 5,
+   "DEX": 5,
+   "INT": 10
+  },
+  "ENC": {
+   "STA": 5,
+   "DEX": 5,
+   "INT": 10,
+   "CHA": 10
+  },
+  "BST": {
+   "STA": 10,
+   "AGI": 5,
+   "DEX": 5,
+   "WIS": 10
+  },
+  "BER": {
+   "STR": 10,
+   "STA": 10,
+   "DEX": 10
+  }
+ },
+ "_casting_stat_README": [
+  "VERIFIED (eqltools.com/attributes, client-mined): each class derives its mana pool",
+  "from its own casting stat, and your pool is the sum of your two highest classes \u2014",
+  "the third is dropped. So a third caster adds no mana. The pool formula itself is",
+  "unpublished, which is why the planner shows the casting stat but no mana number."
+ ],
+ "casting_stat": {
+  "BRD": "INT",
+  "SHD": "INT",
+  "NEC": "INT",
+  "WIZ": "INT",
+  "MAG": "INT",
+  "ENC": "INT",
+  "PAL": "WIS",
+  "RNG": "WIS",
+  "CLR": "WIS",
+  "DRU": "WIS",
+  "SHM": "WIS",
+  "BST": "WIS",
+  "WAR": null,
+  "MNK": null,
+  "ROG": null,
+  "BER": null
+ },
+ "_weights_README": [
+  "HEURISTIC, not game data. Used only to rank gear in the 'Best for class' sort.",
+  "The casting-stat half is grounded (see above); the melee weights are opinion.",
+  "Tune freely \u2014 they are relative multipliers, not absolutes."
+ ],
+ "stat_weights": {
+  "WAR": {
+   "AC": 2.0,
+   "HP": 1.0,
+   "STA": 1.5,
+   "STR": 1.2,
+   "AGI": 0.8,
+   "DEX": 0.6
+  },
+  "CLR": {
+   "WIS": 2.0,
+   "MANA": 1.0,
+   "AC": 1.0,
+   "HP": 0.8,
+   "STA": 0.8
+  },
+  "PAL": {
+   "STR": 1.2,
+   "STA": 1.2,
+   "AC": 1.5,
+   "HP": 0.9,
+   "WIS": 1.2,
+   "MANA": 0.5
+  },
+  "RNG": {
+   "STR": 1.2,
+   "DEX": 1.2,
+   "STA": 1.0,
+   "AC": 1.0,
+   "WIS": 1.0,
+   "MANA": 0.5
+  },
+  "SHD": {
+   "STR": 1.3,
+   "STA": 1.2,
+   "AC": 1.5,
+   "HP": 0.9,
+   "INT": 1.2,
+   "MANA": 0.5
+  },
+  "DRU": {
+   "WIS": 2.0,
+   "MANA": 1.0,
+   "AC": 0.8,
+   "HP": 0.6,
+   "STA": 0.8
+  },
+  "MNK": {
+   "STR": 1.3,
+   "AGI": 1.2,
+   "DEX": 1.0,
+   "STA": 1.0,
+   "AC": 1.2
+  },
+  "BRD": {
+   "CHA": 1.2,
+   "DEX": 1.2,
+   "INT": 1.2,
+   "MANA": 0.8,
+   "STA": 0.8,
+   "AC": 1.0
+  },
+  "ROG": {
+   "DEX": 1.5,
+   "AGI": 1.2,
+   "STR": 1.2,
+   "STA": 0.8,
+   "AC": 0.8
+  },
+  "SHM": {
+   "WIS": 2.0,
+   "MANA": 1.0,
+   "STA": 0.8,
+   "AC": 0.8
+  },
+  "NEC": {
+   "INT": 2.0,
+   "MANA": 1.0,
+   "STA": 0.8,
+   "AC": 0.6,
+   "HP": 0.6
+  },
+  "WIZ": {
+   "INT": 2.0,
+   "MANA": 1.0,
+   "STA": 0.8,
+   "AC": 0.6
+  },
+  "MAG": {
+   "INT": 2.0,
+   "MANA": 1.0,
+   "STA": 0.8,
+   "AC": 0.6
+  },
+  "ENC": {
+   "INT": 2.0,
+   "MANA": 1.0,
+   "CHA": 0.8,
+   "STA": 0.8,
+   "AC": 0.6
+  },
+  "BST": {
+   "WIS": 1.5,
+   "MANA": 0.8,
+   "STR": 1.0,
+   "STA": 1.0,
+   "AGI": 0.8,
+   "AC": 1.0
+  },
+  "BER": {
+   "STR": 1.5,
+   "STA": 1.2,
+   "DEX": 1.0,
+   "AC": 1.0,
+   "HP": 0.8
+  }
+ }
+};
+let CHAR = CHAR_DEFAULT;
+
+/* ---- seed data: verified against eqlwiki, July 2026 ----
+   Small on purpose. Run scrape_eqlwiki.py for the full database. */
+const SEED = {source:"eqlwiki.com (hand-verified seed)", seed:true, items:[
+ {id:"Earthshaker",name:"Earthshaker",url:"https://eqlwiki.com/Earthshaker",
+  tags:["MAGIC","LORE"],slots:["PRIMARY"],skill:"2H Slashing",delay:70,dmg:37,
+  stats:{STR:6,STA:6,DEX:-5},wt:16,size:"GIANT",
+  classes:["WAR","PAL","RNG","SHD"],races:["ALL"],
+  effects:{proc:{name:"Earthquake",detail:"Combat, Casting Time: Instant",level:45}},
+  drops:[{zone:"The Hole",mobs:["Master Yael"]}],era:"Classic Era"},
+
+ {id:"Short_Sword_of_the_Ykesha",name:"Short Sword of the Ykesha",
+  url:"https://eqlwiki.com/Short_Sword_of_the_Ykesha",
+  tags:["MAGIC"],slots:["PRIMARY","SECONDARY"],skill:"1H Slashing",delay:24,dmg:9,
+  stats:{},wt:4.5,size:"MEDIUM",classes:["WAR","PAL","RNG","SHD","BRD","ROG"],races:["ALL"],
+  effects:{proc:{name:"Ykesha",detail:"Combat, Casting Time: Instant",level:37}},
+  drops:[{zone:"Lower Guk",mobs:["the ghoul lord"]}],era:"Classic Era"},
+
+ {id:"Bone-Clasped_Girdle",name:"Bone-Clasped Girdle",
+  url:"https://eqlwiki.com/Bone-Clasped_Girdle",
+  tags:["MAGIC"],slots:["WAIST"],stats:{AC:4,STR:7,DEX:7,STA:7,HP:75,MANA:75},
+  wt:0.1,size:"SMALL",classes:["CLR","DRU","BRD","SHM","NEC","WIZ","MAG","ENC"],races:["ALL"],
+  effects:{focus:{name:"Burning Affliction III"}},
+  drops:[{zone:"Plane of Fear",mobs:["Dracoliche","Fright","Dread"]}],era:"Classic Era"},
+
+ {id:"Crushbone_Belt",name:"Crushbone Belt",url:"https://eqlwiki.com/Crushbone_Belt",
+  tags:["QUEST"],slots:["WAIST"],stats:{AC:1},wt:1.3,size:"SMALL",
+  classes:["WAR","SHD","ROG","SHM"],races:["BAR","TRL","OGR"],effects:{},
+  drops:[{zone:"Crushbone",mobs:["orc centurion","orc trainer"]},
+         {zone:"Greater Faydark",mobs:["an orc centurion","an orc seer","an orc shaman"]},
+         {zone:"Butcherblock Mountains",mobs:["an orc scoutsman"]},
+         {zone:"Nektulos Forest",mobs:["orc runner"]}]},
+]};
+
+/* Slot tokens as they appear in item tooltips, mapped to the planner's names.
+   The wiki's category is "Fingers" but every item's Slot: line reads FINGER —
+   and "SECONDAY" is a genuine typo on the wiki stranding 3 items. */
+const SLOT_ALIAS = {FINGERS:"FINGER", SECONDAY:"SECONDARY"};
+
+/* EQ Legends launches with Antonica/Faydwer/Odus; Kunark is the first
+   expansion and Velious is nowhere near. eqlwiki marks these pages with an
+   explicit "Out of Era" banner — use it when present, otherwise infer from the
+   era category so the filter still works on a pre-reparse dataset. */
+const OUT_OF_ERA_ERAS = new Set(["Velious Era","Kunark Era","Chardok Revamp Era",
+  "Epic Quests Era","FearHateRevamp Era","Nov 2000 Era"]);
+
+/* Items can carry more than one era category (Fanged Skull Stiletto is both
+   Classic and Velious), and the old three-era list missed Epic Quests /
+   FearHateRevamp / Nov 2000 outright. Both sets below were derived by testing
+   candidate rules against the 6,764 hand-flagged rows in the reparsed dataset:
+   "any era category is out-of-era" reproduces 6,756 of them, and these eight
+   are the whole remainder — Kunark/Velious-era items that ARE in EQL. */
+const IN_ERA_ANYWAY = new Set(["Fist of Lightning","Flowing Red Silk Sash",
+  "Leech Husk Tunic","Mantle of Fire","Mucilaginous Girdle","Sash of the Dragonborn",
+  "Scaled Prowler Belt","Scaled Wolf Hide Belt"]);
+
+function outOfEra(i){
+  if(typeof i.out_of_era === "boolean") return i.out_of_era;   // authoritative, if present
+  if(IN_ERA_ANYWAY.has(i.name)) return false;
+  const eras = (i.categories||[]).filter(c => c.endsWith("Era"));
+  if(eras.length) return eras.some(e => OUT_OF_ERA_ERAS.has(e));
+  return OUT_OF_ERA_ERAS.has(i.era);
+}
+function normalizeItems(items){
+  for(const i of items){
+    i.slots = (i.slots||[]).map(s => SLOT_ALIAS[s] || s);
+
+    /* Two dataset shapes exist:
+       - enrich_items.py: guessed `source`/`zones` from wiki categories
+       - --reparse:       real crafted_by / vendors / quests / drops sections
+       Prefer the real sections; only fall back to a precomputed `source`. */
+    if(!i.source){
+      const src = [];
+      if(i.crafted_by?.length) src.push("craft");
+      if(i.vendors?.length)    src.push("vendor");
+      if(i.quests?.length || (i.tags||[]).includes("QUEST")) src.push("quest");
+      if(i.drops?.length)      src.push("drop");
+      i.source = src.length ? src : ["unknown"];
+    }
+    if(!i.zones) i.zones = [...new Set((i.drops||[]).map(d => d.zone))];
+  }
+}
+
+/* ---------------- state ---------------- */
+let DATA = SEED;
+let byId = {};
+const state = {
+  classes:["WAR","SHD","ROG"], race:"OGR",
+  equipped:{},              // slotKey -> {itemId, xp, exalts:{type:srcItemId}}
+  view:{mode:"slot", slot:null, exalt:null}, q:"", inEra:true,
+  sort:"fit",               // fit | weighted | AC | HP | MANA | STR... | ratio
+  /* Both filters are multi-select and deliberately GLOBAL, not per-slot: pick
+     your four zones once and every slot you click stays inside them. Empty set
+     means no filter — that's the difference between "none selected" and
+     "everything selected", which for a farm route is the distinction you want. */
+  src:new Set(), zones:new Set(), zoneOpen:false, zoneQ:""
+};
+
+/* Items with no drop zone (vendor/craft/quest) still need somewhere to live in
+   a zone facet, or filtering by zone would silently delete them. */
+const NOZONE = "(no drop zone)";
+const zonesOf = i => (i.zones && i.zones.length) ? i.zones : [NOZONE];
+const reindex = () => { normalizeItems(DATA.items); byId = {}; DATA.items.forEach(i => byId[i.id] = i); };
+reindex();
+
+/* ---------------- rules engine ---------------- */
+const active = () => [...new Set(state.classes.filter(Boolean))];
+
+/** class list intersection, honouring "ALL" */
+function cx(a, b){
+  if(!a || a.includes("ALL") || isAllExcept(a)) return b ? [...b] : ["ALL"];
+  if(!b || b.includes("ALL") || isAllExcept(b)) return [...a];
+  return a.filter(c => b.includes(c));
+}
+/** slot list intersection */
+function sx(a, b){
+  if(!a) return b ? [...b] : null;
+  if(!b) return [...a];
+  return a.filter(s => b.includes(s));
+}
+/* The scraper emits ["ALL_EXCEPT","IKS",...] for "Race: ALL except IKS". v1
+   flattened those to plain ALL and silently lost the exclusion. */
+const isAllExcept = l => l && l[0] === "ALL_EXCEPT";
+const excluded    = l => l.slice(1);
+
+const usableBy = (list, act) => {
+  if(!list || !list.length || list.includes("ALL")) return true;
+  if(isAllExcept(list)) return act.some(c => !excluded(list).includes(c));
+  return list.some(c => act.includes(c));
+};
+const raceOk = (item, race) => {
+  const r = item.races;
+  if(!r || !r.length || r.includes("ALL") || race === "ALL") return true;
+  if(isAllExcept(r)) return !excluded(r).includes(race);
+  return r.includes(race);
+};
+const showList = l => isAllExcept(l) ? "ALL except " + excluded(l).join(" ") : l.join(" ");
+
+/**
+ * The heart of it: an item's *effective* class + slot restrictions after
+ * exaltations are socketed. Per eqlwiki: "Exaltations carry their own class and
+ * slot restrictions, and these are applied to the item they are inserted into."
+ */
+function effective(entry){
+  const base = byId[entry.itemId];
+  if(!base) return null;
+  const sc = scaledItem(base, entry.xp || 0);
+  let classes = base.classes.slice(), slots = base.slots.slice();
+  const applied = [];
+  for(const ex of EXALTS){
+    if(ex.k === "ornament") continue;            // cosmetic, carries nothing
+    const srcId = entry.exalts?.[ex.k];
+    if(!srcId) continue;
+    const src = byId[srcId];
+    if(!src) continue;
+    const bc = classes.slice(), bs = slots.slice();
+    classes = cx(classes, src.classes);
+    slots   = sx(slots, src.slots);
+    applied.push({type:ex, src,
+      narrowedClass: bc.length !== classes.length || (bc.includes("ALL") && !classes.includes("ALL")),
+      narrowedSlot: bs.length !== slots.length});
+  }
+  return {base, classes, slots, applied, sc};
+}
+
+/** can this item physically go in this slot position? */
+function fitsSlot(item, slotKey){
+  const s = SLOTS.find(x => x.k === slotKey);
+  if(!s) return false;
+  if(s.a === "*") return true;                   // Any slot takes anything equippable
+  return item.slots.includes(s.a);
+}
+
+function issues(){
+  const out = [], act = active();
+  // LORE — only one copy may be equipped
+  const loreCount = {};
+  for(const [k, e] of Object.entries(state.equipped)){
+    const it = byId[e.itemId]; if(!it) continue;
+    if(it.tags.includes("LORE") || it.tags.includes("LORE_EQUIPPED"))
+      (loreCount[it.name] ||= []).push(k);
+  }
+  for(const [nm, ks] of Object.entries(loreCount))
+    if(ks.length > 1)
+      out.push({t:"err", ico:"LORE", m:`<b>${nm}</b> is LORE — you may only equip one. Currently in ${ks.length} slots (${ks.join(", ")}).`});
+
+  for(const [k, e] of Object.entries(state.equipped)){
+    const eff = effective(e); if(!eff) continue;
+    const nm = eff.base.name;
+    if(!usableBy(eff.classes, act))
+      out.push({t:"err", ico:"CLASS", m:`<b>${nm}</b> in ${k} is unusable — after exaltations it needs ${eff.classes.join("/") || "no class"}; you run ${act.join("/")}.`});
+    if(outOfEra(eff.base))
+      out.push({t:"warn", ico:"ERA", m:`<b>${nm}</b> is ${eff.base.era||"out of era"} — not obtainable in EQ Legends yet. Plan around it, don't count on it.`});
+    if(!raceOk(eff.base, state.race))
+      out.push({t:"err", ico:"RACE", m:`<b>${nm}</b> is restricted to ${eff.base.races.join("/")} — you are ${RACES[state.race]}.`});
+
+    const s = SLOTS.find(x => x.k === k);
+    if(s.a !== "*" && !eff.slots.includes(s.a))
+      out.push({t:"err", ico:"SLOT", m:`<b>${nm}</b> can no longer sit in ${s.n} — an exaltation narrowed it to ${eff.slots.join("/") || "nothing"}.`});
+    if(s.a === "*" && eff.slots.length && !eff.slots.includes("*"))
+      out.push({t:"warn", ico:"ANY", m:`<b>${nm}</b> is in an Any slot carrying ${eff.slots.join("/")} restrictions from an exaltation. Any slots take the item, but check it in-game.`});
+
+    for(const a of eff.applied){
+      if(a.narrowedClass)
+        out.push({t:"warn", ico:"EXLT", m:`<b>${a.src.name}</b>'s ${a.type.n.toLowerCase()} narrowed ${nm} to ${eff.classes.join("/")}.`});
+      if(a.narrowedSlot)
+        out.push({t:"warn", ico:"EXLT", m:`<b>${a.src.name}</b>'s ${a.type.n.toLowerCase()} narrowed ${nm} to ${eff.slots.join("/")} only.`});
+      if(a.src.id === e.itemId) continue;
+      out.push({t:"ok", ico:"FARM", m:`Extracting <b>${a.type.n}</b> needs a second <b>${a.src.name}</b> at +${a.type.req}. ${dropLine(a.src) || "No drop data."}`});
+    }
+  }
+  if(!out.length) out.push({t:"ok", ico:"OK", m:"No conflicts. Every equipped piece is legal for this class, race and slot."});
+  return out;
+}
+
+/* ---------------- helpers ---------------- */
+function dropLine(item){
+  // Prefer mob-level drops; fall back to zone categories; then to how it's obtained.
+  if(item.drops?.length){
+    const d = item.drops[0];
+    const extra = item.drops.length > 1 ? ` +${item.drops.length - 1} more` : "";
+    return `<b>${esc(d.zone)}</b>${d.mobs.length ? " — " + d.mobs.slice(0,2).map(esc).join(", ") : ""}${extra}`;
+  }
+  const src = item.source || [];
+  const bits = [];
+  if(src.includes("craft"))  bits.push(`<b>Crafted</b>`);
+  if(src.includes("vendor")) bits.push(`Vendor`);
+  if(src.includes("quest"))  bits.push(`Quest`);
+  if(src.includes("forage")) bits.push(`Foraged`);
+  if(src.includes("ground")) bits.push(`Ground spawn`);
+  if(item.zones?.length){
+    const z = item.zones.slice(0,2).map(esc).join(", ");
+    bits.push(`<b>${z}</b>${item.zones.length>2?` +${item.zones.length-2}`:""}`);
+  }
+  return bits.join(" · ");
+}
+
+/* ---------------- sorting ----------------
+   Ranking is done on tier-0 stats. Tiers scale everything by the same
+   percentage, so the order barely moves — the exception is the +1/tier
+   minimum, which quietly favours items with many small stats over one big one.
+   Worth knowing if you're squinting at the top of the list. */
+const SORTS = [
+  ["fit",      "Best fit (usable, then AC)"],
+  ["weighted", "Best for my classes"],
+  ["ratio",    "Weapon ratio (dmg/delay)"],
+  ["AC","AC"], ["HP","HP"], ["MANA","Mana"],
+  ["STR","STR"], ["STA","STA"], ["AGI","AGI"], ["DEX","DEX"],
+  ["WIS","WIS"], ["INT","INT"], ["CHA","CHA"],
+  ["sumattr",  "Sum of all attributes"],
+  ["wt",       "Lightest"],
+];
+
+/** Heuristic — chardata.stat_weights, averaged across the active trio.
+    Not game data. The casting-stat mapping under it is; the rest is opinion. */
+function weightFor(act){
+  const w = {};
+  act.forEach(c => {
+    const t = CHAR.stat_weights?.[c] || {};
+    for(const [k,v] of Object.entries(t)) w[k] = Math.max(w[k]||0, v);
+  });
+  return w;
+}
+
+function sortKey(i, act){
+  const s = i.stats || {};
+  switch(state.sort){
+    case "fit":      return s.AC || 0;
+    case "ratio":    return i.dmg && i.delay ? i.dmg / i.delay : -1;
+    case "sumattr":  return ATTRS.reduce((a,k) => a + (s[k]||0), 0);
+    case "wt":       return i.wt == null ? -999 : -i.wt;
+    case "weighted": {
+      const w = weightFor(act);
+      return Object.entries(w).reduce((a,[k,v]) => a + (s[k]||0) * v, 0);
+    }
+    default:         return s[state.sort] || 0;
+  }
+}
+
+function statLine(i){
+  const p = [];
+  if(i.dmg) p.push(`${i.dmg}/${i.delay}`);
+  if(i.stats?.AC) p.push(`AC${i.stats.AC}`);
+  const hp = i.stats?.HP, mn = i.stats?.MANA;
+  if(hp) p.push(`HP${hp>0?"+":""}${hp}`);
+  if(mn) p.push(`M${mn>0?"+":""}${mn}`);
+  return p.join(" · ");
+}
+const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+/** Lead with whatever the list is sorted on, so the ordering is legible. */
+function sortStat(i){
+  const s = i.stats || {}, base = statLine(i);
+  if(state.sort === "fit") return base;
+  if(state.sort === "weighted"){
+    const v = sortKey(i, active());
+    return `<b style="color:var(--brass)">${v.toFixed(0)}</b>${base?" · "+base:""}`;
+  }
+  if(state.sort === "ratio")
+    return i.dmg && i.delay ? `<b style="color:var(--brass)">${(i.dmg/i.delay).toFixed(2)}</b> · ${i.dmg}/${i.delay}` : base;
+  if(state.sort === "wt") return `<b style="color:var(--brass)">${i.wt ?? "—"}</b>${base?" · "+base:""}`;
+  if(state.sort === "sumattr")
+    return `<b style="color:var(--brass)">${ATTRS.reduce((a,k)=>a+(s[k]||0),0)}</b>${base?" · "+base:""}`;
+  const v = s[state.sort];
+  return `<b style="color:${v?"var(--brass)":"var(--faint)"}">${state.sort} ${v?(v>0?"+":"")+v:"—"}</b>${base?" · "+base:""}`;
+}
+
+function tagPills(i){
+  let h = "";
+  if(i.tags.includes("LORE") || i.tags.includes("LORE_EQUIPPED")) h += `<span class="pill lore">Lore</span>`;
+  if(i.tags.includes("MAGIC")) h += `<span class="pill magic">Magic</span>`;
+  if(i.tags.includes("QUEST")) h += `<span class="pill quest">Quest</span>`;
+  if(i.tags.includes("NO_DROP") || i.tags.includes("NO_TRADE")) h += `<span class="pill no">No drop</span>`;
+  if(outOfEra(i)) h += `<span class="pill ooe">Out of era</span>`;
+  if(i.charges) h += `<span class="pill chg">${i.charges} charges</span>`;
+  if((i.source||[]).includes("craft")) h += `<span class="pill craft">Crafted</span>`;
+  if((i.source||[]).includes("vendor")) h += `<span class="pill vend">Vendor</span>`;
+  return h;
+}
+
+/* ---------------- render: paper doll ---------------- */
+function renderDoll(){
+  const act = active(), errs = {};
+  issues().filter(i => i.t === "err").forEach(i => {
+    const m = i.m.match(/in (EAR1|EAR2|HEAD|FACE|NECK|SHOULDERS|ARMS|BACK|WRIST1|WRIST2|RANGE|HANDS|PRIMARY|SECONDARY|FINGER1|FINGER2|CHEST|LEGS|FEET|WAIST|AMMO|ANY1|ANY2)/);
+    if(m) errs[m[1]] = 1;
+  });
+  Object.entries(state.equipped).forEach(([k,e]) => {
+    const it = byId[e.itemId];
+    if(it && (it.tags.includes("LORE") || it.tags.includes("LORE_EQUIPPED"))){
+      const dupes = Object.entries(state.equipped).filter(([,x]) => byId[x.itemId]?.name === it.name);
+      if(dupes.length > 1) errs[k] = 1;
+    }
+  });
+
+  document.getElementById("doll").innerHTML = SLOTS.map(s => {
+    const e = state.equipped[s.k], it = e && byId[e.itemId];
+    const sel = state.view.slot === s.k;
+    const cls = ["slot", it ? "filled" : "", sel ? "sel" : "",
+                 s.a === "*" ? "any" : "", errs[s.k] ? "bad" : ""].join(" ");
+    let inner = `<div class="slot-name">${s.n}</div>`;
+    if(it){
+      inner += `<div class="slot-item">${esc(it.name)}</div><div class="slot-meta">
+        <span class="lvl">+${tierOf(e.xp||0)}</span>
+        <span class="gems">${EXALTS.map(x =>
+          `<span class="gem ${e.exalts[x.k] || (x.k==='ornament'&&e.exalts.ornament) ? "on" : ""} ${x.k==='ornament'?'orn':''}"></span>`).join("")}</span>
+        ${errs[s.k] ? `<span class="flag err">!</span>` : ""}
+        ${(it.tags.includes("LORE")||it.tags.includes("LORE_EQUIPPED")) ? `<span class="flag lore">Lore</span>` : ""}
+      </div>`;
+    } else {
+      inner += `<div class="slot-empty">${s.a === "*" ? "flex — anything" : "empty"}</div>`;
+    }
+    return `<button class="${cls}" data-slot="${s.k}">${inner}</button>`;
+  }).join("");
+
+  document.querySelectorAll("[data-slot]").forEach(b =>
+    b.onclick = () => { state.view = {mode:"slot", slot:b.dataset.slot, exalt:null}; render(); });
+}
+
+/* ---------------- render: totals ---------------- */
+const ATTRS = ["STR","STA","AGI","DEX","WIS","INT","CHA"];
+
+/** gear contribution, at each item's current tier */
+function gearStats(){
+  const t = {AC:0,HP:0,MANA:0,STR:0,STA:0,AGI:0,DEX:0,WIS:0,INT:0,CHA:0};
+  Object.values(state.equipped).forEach(e => {
+    const it = byId[e.itemId]; if(!it) return;
+    const s = scaledItem(it, e.xp||0).stats;
+    for(const k in t) if(s[k]) t[k] += s[k];
+  });
+  return t;
+}
+
+function renderTotals(){
+  const t = gearStats();
+  document.getElementById("totals").innerHTML = Object.entries(t).map(([k,v]) =>
+    `<div class="tot"><dt>${k}</dt><dd class="${v?"":"z"}">${v>0?"+":""}${v}</dd></div>`).join("");
+}
+
+/* ---------------- render: where the set comes from ----------------
+   The counterpart to the zone filter: once gear is on, this is the farm route.
+   An item that drops in three zones counts in all three — the question being
+   answered is "where could I get this", not "where will I get it". */
+function renderZoneSum(){
+  const el = document.getElementById("zonesum");
+  const eq = Object.values(state.equipped).map(e => byId[e.itemId]).filter(Boolean);
+  if(!eq.length){ el.innerHTML = ""; return; }
+  const c = {};
+  eq.forEach(i => zonesOf(i).forEach(z => c[z] = (c[z]||0)+1));
+  const rows = Object.entries(c).sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]));
+  const only = rows.filter(([,n]) => n === 1).length;
+  el.innerHTML = `<b>Set draws on ${rows.length} zone${rows.length===1?"":"s"}</b>` +
+    (only ? ` · ${only} contributing a single piece` : "") + `<br>` +
+    rows.map(([z,n]) => `${esc(z)} <span style="color:var(--brass)">${n}</span>`).join(" · ") +
+    (state.zones.size ? `<br><span style="color:var(--faint)">Browser is filtered to ${state.zones.size} zone${state.zones.size===1?"":"s"}.</span>` : "");
+}
+
+/* ---------------- render: character sheet ----------------
+   base(race) + adds(class1..3) + gear. EQL has no point buy, so race and the
+   three classes fully determine the naked sheet — which is the whole reason a
+   triple-INT trio starts absurd. */
+function renderChar(){
+  const el = document.getElementById("charsheet");
+  const act = active();
+  const base = CHAR.races[state.race];
+  const sub = document.getElementById("charsub");
+
+  if(!base){
+    sub.innerHTML = "";
+    el.innerHTML = `<div class="empty"><b>Pick a race</b>Set a race above to see base attributes and what each class adds.</div>`;
+    return;
+  }
+
+  const adds = {}, per = {};
+  ATTRS.forEach(a => adds[a] = 0);
+  act.forEach(c => {
+    per[c] = CHAR.classes[c] || {};
+    ATTRS.forEach(a => adds[a] += (per[c][a] || 0));
+  });
+
+  const gear = gearStats();
+  const cap = CHAR.attr_cap || 150;
+
+  /* Verified invariant: every class adds exactly 30. If an edit breaks it, say so. */
+  const bad = act.filter(c => Object.values(CHAR.classes[c]||{}).reduce((a,b)=>a+b,0) !== (CHAR.class_add_total||30));
+  sub.innerHTML = CHAR.verified
+    ? `<span class="badge ok">verified</span>`
+    : `<span class="badge" title="These are classic-EQ numbers carried over on an assumption. See chardata.json.">unverified</span>`;
+
+  const castStats = new Set(act.map(c => CHAR.casting_stat?.[c]).filter(Boolean));
+
+  let h = `<table class="sheet"><thead><tr><th></th><th>Base</th>
+    ${act.map(c => `<th>${c}</th>`).join("")}<th>Naked</th><th>Gear</th><th>Total</th></tr></thead><tbody>`;
+  for(const a of ATTRS){
+    const naked = base[a] + adds[a], total = naked + (gear[a]||0);
+    h += `<tr class="${castStats.has(a)?"key":""}"><td>${a}</td><td class="g">${base[a]}</td>
+      ${act.map(c => `<td class="g">${per[c][a] ? "+"+per[c][a] : "·"}</td>`).join("")}
+      <td>${naked}</td>
+      <td class="gear">${gear[a] ? (gear[a]>0?"+":"")+gear[a] : "·"}</td>
+      <td class="tot ${total > cap ? "over" : ""}">${total}${total > cap ? "‡" : ""}</td></tr>`;
+  }
+  h += `</tbody></table>`;
+
+  h += `<div class="data-note">`;
+  if(castStats.size){
+    const pools = act.filter(c => CHAR.casting_stat?.[c])
+      .map(c => `${c} (${CHAR.casting_stat[c]})`);
+    h += `<b>Mana:</b> ${pools.length ? pools.join(", ") + " cast" : "no casters"}. Pools come from your
+      <b>two highest</b> classes only — a third caster adds nothing. Each class works its pool off its own
+      casting stat, highlighted above. The formula is unpublished, so there's no number here.<br>`;
+  }
+  if(act.length < 3) h += `<b>${3-act.length} class slot${act.length===2?"":"s"} empty</b> — each class is worth exactly 30 points.<br>`;
+  if([...ATTRS].some(a => base[a]+adds[a]+(gear[a]||0) > cap))
+    h += `‡ over the reported ${cap} ceiling. Players report it; it isn't in the client, so nothing is clamped.<br>`;
+  if(bad.length) h += `<span style="color:var(--bad)"><b>chardata is off:</b> ${bad.join(", ")} don't add to ${CHAR.class_add_total||30}.</span><br>`;
+  if(!CHAR.verified) h += `Attribute numbers are <b>classic EQ values, unverified for EQL</b> — the wiki doesn't publish them. Check them against your own stat window and fix <code>chardata.json</code>.`;
+  h += `</div>`;
+  el.innerHTML = h;
+}
+
+/* ---------------- render: rules log ---------------- */
+function renderLog(){
+  const is = issues();
+  document.getElementById("log").innerHTML = is.map(i =>
+    `<div class="issue ${i.t}"><span class="ico">${i.ico}</span><span>${i.m}</span></div>`).join("");
+  const e = is.filter(i => i.t === "err").length, w = is.filter(i => i.t === "warn").length;
+  document.getElementById("logsub").textContent =
+    e || w ? `${e} blocking · ${w} to watch` : "all clear";
+}
+
+/* ---------------- render: drawer ---------------- */
+function renderDrawer(){
+  const d = document.getElementById("drawer");
+  const {slot, exalt} = state.view;
+
+  if(!slot){
+    document.getElementById("dtitle").textContent = "Browser";
+    document.getElementById("dsub").textContent = "";
+    d.innerHTML = `<div class="empty"><b>Pick a slot</b>Click any slot on the left to see the gear that fits it, filtered to your classes and race.</div>`;
+    return;
+  }
+  const sdef = SLOTS.find(s => s.k === slot);
+  const entry = state.equipped[slot];
+
+  /* --- exaltation source picker --- */
+  if(exalt && entry){
+    const ex = EXALTS.find(x => x.k === exalt);
+    const eff = effective(entry);
+    document.getElementById("dtitle").textContent = ex.n + " exaltation";
+    document.getElementById("dsub").textContent = eff.base.name;
+
+    let h = `<button class="back" id="back">&larr; back to ${esc(eff.base.name)}</button>`;
+    if(ex.k === "ornament"){
+      h += `<div class="note"><b>Cosmetic only.</b> ${ex.note}<br><br>The wiki currently notes: <i>"Ornamentation Tokens are not currently available."</i></div>`;
+      d.innerHTML = h; document.getElementById("back").onclick = back; return;
+    }
+
+    const cands = DATA.items.filter(i => i.effects?.[ex.src]);
+    const scored = cands.map(i => {
+      const c = cx(eff.classes, i.classes), s = sx(eff.slots, i.slots);
+      const slotOk = sdef.a === "*" ? true : (s && s.includes(sdef.a));
+      const ok = c.length > 0 && s && s.length > 0 && slotOk && usableBy(c, active());
+      let why = "";
+      if(!c.length) why = `No shared class with ${eff.base.name}.`;
+      else if(!s || !s.length) why = `Slot restriction (${i.slots.join("/")}) can't meet ${eff.slots.join("/")}.`;
+      else if(!slotOk) why = `Would force ${eff.base.name} to ${s.join("/")} — not ${sdef.n}.`;
+      else if(!usableBy(c, active())) why = `Result usable only by ${c.join("/")}.`;
+      return {i, ok, why, c, s};
+    }).sort((a,b) => (b.ok - a.ok) || a.i.name.localeCompare(b.i.name));
+
+    h += `<div class="note"><b>Unlocks at +${ex.req}.</b> Level a second copy of the source item to +${ex.req}, then its ${ex.n.toLowerCase()} becomes a removable exaltation. Sockets here only if it shares a class and a legal slot.</div>`;
+
+    if(!scored.length){
+      h += `<div class="empty"><b>No ${ex.n.toLowerCase()} sources</b>The loaded data has no items with a ${ex.n.toLowerCase()} effect. Load the full scrape to populate this.</div>`;
+    } else {
+      h += scored.map(({i, ok, why, c, s}) => {
+        const eff2 = i.effects[ex.src];
+        return `<button class="row ${ok?"":"ineligible"}" data-src="${i.id}" ${ok?"":"disabled"}>
+          <div class="row-top"><span class="row-name">${esc(eff2.name)}</span>
+            <span class="row-stat">+${ex.req}</span></div>
+          <div class="row-sub">from <b style="color:var(--dim)">${esc(i.name)}</b> · ${showList(i.classes)} · ${i.slots.join("/")}
+            ${eff2.level ? " · L"+eff2.level : ""}</div>
+          <div class="row-drop">${dropLine(i) || "No drop data on wiki"}</div>
+          ${ok ? (c.join("/") !== eff.classes.join("/") || s.join("/") !== eff.slots.join("/")
+              ? `<div class="row-sub" style="color:var(--warn)">⚠ narrows target to ${c.join("/")} · ${s.join("/")}</div>` : "")
+            : `<div class="row-sub" style="color:var(--bad)">✕ ${why}</div>`}
+        </button>`;
+      }).join("");
+    }
+    d.innerHTML = h;
+    document.getElementById("back").onclick = back;
+    d.querySelectorAll("[data-src]").forEach(b => b.onclick = () => {
+      state.equipped[slot].exalts[exalt] = b.dataset.src;
+      state.view.exalt = null; render();
+    });
+    return;
+  }
+
+  /* --- equipped item detail + exaltation rail --- */
+  if(entry){
+    const eff = effective(entry), it = eff.base;
+    document.getElementById("dtitle").textContent = sdef.n;
+    document.getElementById("dsub").textContent = `+${eff.sc.tier} · ${(eff.sc.cum*100).toFixed(1)}%`;
+
+    let tip = "";
+    if(it.tags.length) tip += `<span class="t-tag">${it.tags.map(t=>t.replace("_"," ")+" ITEM").join(" ")}</span>\n`;
+    tip += `<span class="t-key">Slot:</span> ${eff.slots.join(" ")}\n`;
+    if(it.skill) tip += `<span class="t-key">Skill:</span> ${it.skill}  <span class="t-key">Atk Delay:</span> ${it.delay}\n`;
+    if(it.dmg) tip += `<span class="t-key">DMG:</span> ${eff.sc.dmg}${eff.sc.dmg!==it.dmg?`<span class="delta"> (+${eff.sc.dmg-it.dmg})</span>`:""}` +
+      (it.delay ? `  <span class="t-key">Ratio:</span> ${(eff.sc.dmg/it.delay).toFixed(2)}` : "") + `\n`;
+    const st = Object.entries(eff.sc.stats||{}).map(([k,v]) => {
+      const b = it.stats[k], d = v - b;
+      return `${k}: ${v>0?"+":""}${v}${d ? `<span class="delta${d<0?" neg":""}"> (${d>0?"+":""}${d})</span>` : ""}`;
+    }).join("  ");
+    if(st) tip += st + "\n";
+    if(it.charges) tip += `<span class="t-key">Charges:</span> ${it.charges}\n`;
+    if(it.wt != null) tip += `<span class="t-key">WT:</span> ${eff.sc.wt}  <span class="t-key">Size:</span> ${it.size||"—"}\n`;
+    tip += `<span class="t-key">Class:</span> ${eff.classes.join(" ")}\n`;
+    tip += `<span class="t-key">Race:</span> ${showList(it.races)}\n`;
+    if(it.effects?.focus) tip += `<span class="t-foc">Focus Effect: ${esc(it.effects.focus.name)}</span>\n`;
+    ["proc","click","worn"].forEach(t => { if(it.effects?.[t])
+      tip += `<span class="t-eff">Effect: ${esc(it.effects[t].name)} (${esc(it.effects[t].detail||t)})</span>\n`; });
+
+    let h = `<div class="tip"><div class="tip-name">${esc(it.name)}</div><pre>${tip.trim()}</pre></div>`;
+
+    const tier = eff.sc.tier;
+    h += `<div class="rail"><div class="rail-h"><h3>Tier</h3>
+      <div class="tierpick">${TIER_XP.map((x,l) =>
+        `<button data-lvl="${l}" class="${tier===l?"on":""} ${l>4?"gated":""}" title="${TIER_XP[l]} xp">+${l}</button>`).join("")}</div></div>`;
+
+    h += `<div class="xpbar"><input type="range" id="xp" min="0" max="${MAX_XP}" value="${entry.xp||0}">
+      <span class="xpv">${entry.xp||0} / ${MAX_XP} xp</span></div>`;
+
+    if(tier < 10){
+      const need = TIER_XP[tier+1] - (entry.xp||0);
+      const mote = [...MOTES].reverse().find(m => tier <= m.max);
+      h += `<div class="note"><b>+${tier} → +${tier+1}: ${need} more xp.</b>
+        Merging a duplicate at +${tier} gives ${TIER_XP[tier]||1} xp${tier>=1?` — a copy at +${tier+1} gives ${TIER_XP[tier+1]}`:""}.
+        ${mote ? `Best mote that still feeds this: <b>Mote of ${mote.n} Potential</b> (${mote.xp} xp, caps at +${mote.max}) — ${Math.ceil(need/mote.xp)} of them.` : `No mote can feed an item this high; only duplicates work.`}
+        Stats creep up as xp lands, not just on ding.</div>`;
+    }
+
+    h += `<div class="rail"><div class="rail-h"><h3>Exaltations</h3><div class="sub">sockets open by tier</div></div>`;
+
+    h += EXALTS.map(x => {
+      const locked = eff.sc.tier < x.req;
+      const srcId = entry.exalts[x.k], src = srcId && byId[srcId];
+      const val = x.k === "ornament"
+        ? (src ? src.name + " (appearance)" : null)
+        : (src ? `${src.effects[x.src].name} — from ${src.name}` : null);
+      return `<div class="exalt ${locked?"locked":""} ${src?"set":"open"} ${x.k==='ornament'?'orn-s':''}"
+                data-ex="${locked?"":x.k}">
+        <span class="socket">${locked ? "🔒" : (src ? "" : "+"+x.req)}</span>
+        <span class="ex-txt"><span class="ex-type">${x.n}</span>
+          <span class="ex-val ${val?"":"none"}">${val ? esc(val) : (locked ? `locked — needs +${x.req}` : "empty · click to fit")}</span></span>
+        ${src ? `<button class="ex-clear" data-clr="${x.k}">clear</button>` : `<span class="ex-req">+${x.req}</span>`}
+      </div>`;
+    }).join("") + `</div>`;
+
+    if(tier < 4)
+      h += `<div class="note"><b>+${tier} of +4 for sockets.</b> The last exaltation socket opens at +4, but stats keep climbing to +10 — at +10 every stat is double its tier-0 value.</div>`;
+
+    eff.applied.forEach(a => {
+      if(a.narrowedClass || a.narrowedSlot)
+        h += `<div class="note warn"><b>${esc(a.src.name)}</b>'s ${a.type.n.toLowerCase()} carried its own restrictions onto ${esc(it.name)}: now <b>${eff.classes.join("/")}</b> · <b>${eff.slots.join("/")}</b>. This is not cosmetic — it changes where the item can be worn.</div>`;
+    });
+
+    if(it.crafted_by?.length)
+      h += `<div class="note"><b>Player crafted.</b> ${it.crafted_by.slice(0,3).map(esc).join("<br>")}</div>`;
+    h += `<button class="row" id="unequip" style="color:var(--bad)"><div class="row-top"><span class="row-name">Remove ${esc(it.name)}</span></div></button>`;
+    h += `<div class="data-note">Source: <a href="${it.url}" target="_blank" rel="noopener">${it.url.replace("https://","")}</a></div>`;
+
+    d.innerHTML = h;
+    const setXp = v => {
+      entry.xp = Math.max(0, Math.min(MAX_XP, v));
+      const t = tierOf(entry.xp);
+      EXALTS.forEach(x => { if(t < x.req) entry.exalts[x.k] = null; });
+      render();
+    };
+    d.querySelectorAll("[data-lvl]").forEach(b => b.onclick = () => setXp(TIER_XP[+b.dataset.lvl]));
+    const xpEl = document.getElementById("xp");
+    if(xpEl) xpEl.oninput = () => {
+      entry.xp = +xpEl.value;
+      const t = tierOf(entry.xp);
+      EXALTS.forEach(x => { if(t < x.req) entry.exalts[x.k] = null; });
+      renderDoll(); renderTotals(); renderChar(); renderLog();
+      d.querySelector(".xpv").textContent = `${entry.xp} / ${MAX_XP} xp`;
+      document.getElementById("dsub").textContent = `+${t} · ${(cumBonus(entry.xp)*100).toFixed(1)}%`;
+    };
+    if(xpEl) xpEl.onchange = () => render();
+    d.querySelectorAll("[data-ex]").forEach(el => { if(el.dataset.ex) el.onclick = ev => {
+      if(ev.target.dataset.clr) return;
+      state.view.exalt = el.dataset.ex; render();
+    };});
+    d.querySelectorAll("[data-clr]").forEach(b => b.onclick = ev => {
+      ev.stopPropagation(); entry.exalts[b.dataset.clr] = null; render();
+    });
+    document.getElementById("unequip").onclick = () => { delete state.equipped[slot]; render(); };
+    return;
+  }
+
+  /* --- gear list for an empty slot --- */
+  document.getElementById("dtitle").textContent = sdef.n + (sdef.a === "*" ? " (flex)" : "");
+  const act = active();
+  let pool = DATA.items.filter(i => fitsSlot(i, slot));
+  const hiddenEra = state.inEra ? pool.filter(outOfEra).length : 0;
+  if(state.inEra) pool = pool.filter(i => !outOfEra(i));
+  if(state.q) pool = pool.filter(i =>
+    (i.name + " " + (i.drops||[]).map(x=>x.zone+" "+x.mobs.join(" ")).join(" ")).toLowerCase()
+      .includes(state.q.toLowerCase()));
+
+  /* Facet counts are computed with every filter EXCEPT the facet's own applied,
+     so a count tells you what you'd get by clicking, not what you already have. */
+  const bySrc  = i => !state.src.size   || (i.source||[]).some(s => state.src.has(s));
+  const byZone = i => !state.zones.size || zonesOf(i).some(z => state.zones.has(z));
+
+  const srcCounts = {};
+  pool.filter(byZone).forEach(i => (i.source||[]).forEach(s => srcCounts[s] = (srcCounts[s]||0)+1));
+  const zoneCounts = {};
+  pool.filter(bySrc).forEach(i => zonesOf(i).forEach(z => zoneCounts[z] = (zoneCounts[z]||0)+1));
+
+  const preFilter = pool.length;
+  pool = pool.filter(bySrc).filter(byZone);
+
+  const scored = pool.map(i => {
+    let ok = true, why = "";
+    if(!usableBy(i.classes, act)){ ok = false; why = `Needs ${showList(i.classes)}`; }
+    else if(!raceOk(i, state.race)){ ok = false; why = `${showList(i.races)} only`; }
+    else {
+      const dupe = Object.entries(state.equipped).find(([k,e]) =>
+        byId[e.itemId]?.name === i.name &&
+        (i.tags.includes("LORE") || i.tags.includes("LORE_EQUIPPED")));
+      if(dupe){ ok = false; why = `LORE — already equipped in ${dupe[0]}`; }
+    }
+    return {i, ok, why, k:sortKey(i, act)};
+  }).sort((a,b) => (b.ok - a.ok) || (b.k - a.k) || a.i.name.localeCompare(b.i.name));
+
+  const nFilt = (state.zones.size ? 1 : 0) + (state.src.size ? 1 : 0);
+  document.getElementById("dsub").textContent =
+    `${scored.filter(s=>s.ok).length} usable / ${pool.length}` +
+    (nFilt ? ` of ${preFilter}` : "");
+
+  const SRC = [["drop","Drops"],["quest","Quest"],["vendor","Vendor"],["craft","Crafted"],["forage","Forage"]];
+  let h = `<div class="search"><input type="search" id="q" placeholder="Filter by name, zone or mob…" value="${esc(state.q)}"></div>`;
+
+  /* ---- zone facet ---- */
+  const zAll = Object.entries(zoneCounts)
+    .sort((a,b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  h += `<div class="fbar">
+    <button class="fbtn ${state.zones.size?"on":""}" id="zbtn">
+      <span>${state.zones.size ? `Zones · ${state.zones.size} selected` : "Zones · all"}</span>
+      <span class="cnt">${state.zoneOpen?"▴":"▾"} ${zAll.length}</span></button>
+    ${state.zones.size?`<button class="clr" id="zclr">clear</button>`:""}</div>`;
+
+  if(state.zoneOpen){
+    const q = state.zoneQ.toLowerCase();
+    let list = zAll.filter(([z]) => !q || z.toLowerCase().includes(q));
+    const CAPZ = 60, over = Math.max(0, list.length - CAPZ);
+    list = list.slice(0, CAPZ);
+    /* A selected zone must stay visible even when this slot has nothing in it,
+       or you can't untick it without clearing the whole filter. */
+    for(const z of state.zones)
+      if(!list.some(([n]) => n === z)) list.push([z, zoneCounts[z] || 0]);
+    h += `<div class="zpanel">
+      <input type="search" id="zq" placeholder="Find a zone…" value="${esc(state.zoneQ)}">
+      <div class="zlist">${list.map(([z,n]) =>
+        `<button class="zchip ${state.zones.has(z)?"on":""} ${n?"":"dim"}" data-zone="${esc(z)}">
+          ${esc(z)} <span class="n">${n}</span></button>`).join("")}
+        ${over?`<div class="zmore">+${over} more — type above to narrow.</div>`:""}
+        ${zAll.length?"":`<div class="zmore">No zone data for this slot.</div>`}</div></div>`;
+  }
+
+  h += `<div class="sortbar"><label for="sort">Sort</label><select id="sort">${SORTS.map(([k,l]) =>
+      `<option value="${k}" ${state.sort===k?"selected":""}>${l}</option>`).join("")}</select></div>
+    <div class="chips">${SRC.map(([k,l]) =>
+      `<button class="chip ${state.src.has(k)?"on":""}" data-srcf="${k}" title="${srcCounts[k]||0} here">${l}${srcCounts[k]?` · ${srcCounts[k]}`:""}</button>`).join("")}
+      <button class="chip era ${state.inEra?"on":""}" id="erachip" title="Hide Kunark/Velious gear that isn't in EQ Legends yet">
+        ${state.inEra ? `In era only${hiddenEra?` · ${hiddenEra} hidden`:""}` : "Showing out-of-era"}</button></div>`;
+
+  if(state.zones.size)
+    h += `<div class="note"><b>Filtered to ${state.zones.size} zone${state.zones.size===1?"":"s"}:</b>
+      ${[...state.zones].map(esc).join(" · ")}.<br>This sticks as you click through slots — build the whole set out of one route, then clear it.</div>`;
+  if(sdef.a === "*")
+    h += `<div class="note"><b>Any slot.</b> Takes any equippable item at full stats — a second shield for AC, a spare breastplate, a boot dagger for backstab. Class and race rules still apply.</div>`;
+
+  if(!scored.length){
+    h += `<div class="empty"><b>Nothing here</b>${DATA.seed
+      ? "The built-in seed only holds a handful of verified items. Run <code>scrape_eqlwiki.py</code> and load the result to browse the full database."
+      : "No items match this slot and filter."}</div>`;
+  } else {
+    const CAP = 150, shown = scored.slice(0, CAP);
+    if(scored.length > CAP)
+      h += `<div class="note"><b>Showing ${CAP} of ${scored.length}.</b> Type above to narrow by name, zone or mob — or use the filters.</div>`;
+    h += shown.map(({i, ok, why}) => `<button class="row ${ok?"":"ineligible"}" data-eq="${i.id}" ${ok?"":"disabled"}>
+      <div class="row-top"><span class="row-name">${esc(i.name)}</span><span class="row-stat">${sortStat(i)}</span></div>
+      <div class="row-sub">${tagPills(i)} ${showList(i.classes)} ${i.races.includes("ALL")?"":"· "+showList(i.races)}
+        ${i.effects?.focus?`<span class="pill foc">Focus</span>`:""}
+        ${i.effects?.proc?`<span class="pill foc">Proc</span>`:""}
+        ${i.effects?.click?`<span class="pill foc">Click</span>`:""}
+        ${i.effects?.worn?`<span class="pill foc">Worn</span>`:""}</div>
+      <div class="row-drop">${dropLine(i) || "No drop data on wiki"}</div>
+      ${ok?"":`<div class="row-sub" style="color:var(--bad)">✕ ${why}</div>`}
+    </button>`).join("");
+  }
+  d.innerHTML = h;
+  const ec = document.getElementById("erachip");
+  if(ec) ec.onclick = () => { state.inEra = !state.inEra; renderDrawer(); };
+  const so = document.getElementById("sort");
+  if(so) so.onchange = () => { state.sort = so.value; renderDrawer(); };
+
+  const zb = document.getElementById("zbtn");
+  if(zb) zb.onclick = () => { state.zoneOpen = !state.zoneOpen; renderDrawer(); };
+  const zc = document.getElementById("zclr");
+  if(zc) zc.onclick = () => { state.zones.clear(); render(); };
+  d.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => {
+    const z = b.dataset.zone;
+    state.zones.has(z) ? state.zones.delete(z) : state.zones.add(z);
+    render();                       // totals summary tracks the filter too
+  });
+  const zq = document.getElementById("zq");
+  if(zq) zq.oninput = () => { state.zoneQ = zq.value; renderDrawer();
+    const n = document.getElementById("zq"); n.focus(); n.setSelectionRange(n.value.length,n.value.length); };
+  d.querySelectorAll("[data-srcf]").forEach(b => b.onclick = () => {
+    const k = b.dataset.srcf;
+    state.src.has(k) ? state.src.delete(k) : state.src.add(k);
+    renderDrawer();
+  });
+  const q = document.getElementById("q");
+  q.oninput = () => { state.q = q.value; renderDrawer();
+    const n = document.getElementById("q"); n.focus(); n.setSelectionRange(n.value.length,n.value.length); };
+  d.querySelectorAll("[data-eq]").forEach(b => b.onclick = () => {
+    state.equipped[slot] = {itemId:b.dataset.eq, xp:0,
+      exalts:{ornament:null,focus:null,click:null,worn:null,proc:null}};
+    state.q = ""; render();
+  });
+}
+const back = () => { state.view.exalt = null; render(); };
+
+/* ---------------- data note ---------------- */
+function renderDataNote(){
+  document.getElementById("datanote").innerHTML = DATA.seed
+    ? `<b>Running on the built-in seed — ${DATA.items.length} items.</b> These four are hand-verified against eqlwiki so the rules engine has something real to chew on (they reproduce the wiki's own Earthshaker → Short Sword of the Ykesha example exactly).<br><br>
+       For the real thing, run <code>scrape_eqlwiki.py</code> — it pulls every equippable item from eqlwiki (stats, tags, class/race, focus/click/worn/proc effects, and the zone + mob each one drops from), then hit <b>Load item data</b>. The wiki is live, so you get this week's Crushbone and Splitpaw drops.<br>
+       <code>python scrape_eqlwiki.py --zone Crushbone</code> for a quick targeted pull.`
+    : `<b>Loaded ${DATA.items.length} items</b> from ${esc(DATA.source||"file")}${DATA.scraped?` · scraped ${esc(DATA.scraped)}`:""}. Re-run the scraper to refresh after a patch.
+       <br><br>Tier 0-10 stats are computed here from each item's tier-0 block, not read from the file — the wiki only ever lists tier 0. ${DATA.tiers_included?"This file also carries a baked <code>tiers</code> array; the planner ignores it and recomputes.":""}`;
+}
+
+/* ---------------- boot ---------------- */
+function render(){ renderDoll(); renderTotals(); renderZoneSum(); renderChar(); renderLog(); renderDrawer(); renderDataNote();
+  document.getElementById("dollsub").textContent =
+    `${Object.keys(state.equipped).length}/${SLOTS.length} slots · ${active().join(" / ")}`;
+}
+
+function initControls(){
+  ["c1","c2","c3"].forEach((id, n) => {
+    const s = document.getElementById(id);
+    s.innerHTML = `<option value="">— none —</option>` +
+      Object.entries(CLASSES).map(([k,v]) => `<option value="${k}">${v}</option>`).join("");
+    s.value = state.classes[n] || "";
+    s.onchange = () => { state.classes[n] = s.value; render(); };
+  });
+  const r = document.getElementById("race");
+  r.innerHTML = Object.entries(RACES).map(([k,v]) => `<option value="${k}">${v}</option>`).join("");
+  r.value = state.race;
+  r.onchange = () => { state.race = r.value; render(); };
+
+  const cf = document.getElementById("charfile");
+  document.getElementById("loadchar").onclick = () => cf.click();
+  cf.onchange = () => {
+    const file = cf.files[0]; if(!file) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try{
+        const j = JSON.parse(rd.result);
+        if(!j.races || !j.classes) throw new Error("expecting races{} and classes{}");
+        const total = j.class_add_total || 30;
+        const bad = Object.entries(j.classes).filter(([,v]) =>
+          Object.values(v).reduce((a,b)=>a+b,0) !== total).map(([k])=>k);
+        if(bad.length && !confirm(
+          `These classes don't add up to ${total}: ${bad.join(", ")}.\n\n` +
+          `Every EQL class is worth exactly ${total} points, so that's probably a typo. Load anyway?`)) return;
+        CHAR = j; render();
+      }catch(e){ alert("Couldn't read that file: " + e.message + "\n\nExpecting chardata.json."); }
+    };
+    rd.readAsText(file);
+  };
+
+  const f = document.getElementById("file");
+  document.getElementById("load").onclick = () => f.click();
+  f.onchange = () => {
+    const file = f.files[0]; if(!file) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      try{
+        const j = JSON.parse(rd.result);
+        const items = Array.isArray(j) ? j : j.items;
+        if(!Array.isArray(items)) throw new Error("no items array");
+        DATA = {source:j.source||file.name, scraped:j.scraped, items, seed:false};
+        reindex(); state.equipped = {}; state.view = {mode:"slot",slot:null,exalt:null};
+        render();
+      }catch(e){
+        alert("Couldn't read that file: " + e.message +
+          "\n\nExpecting items.json from scrape_eqlwiki.py.");
+      }
+    };
+    rd.readAsText(file);
+  };
+}
+initControls();
+render();
+</script>
+</body>
+</html>
