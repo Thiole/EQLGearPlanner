@@ -81,6 +81,43 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 .delta{color:var(--ok)}
 .delta.neg{color:var(--bad)}
 
+/* ---------- added: BiS weights ---------- */
+.wbody{padding:12px 14px}
+.wmode{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.wmode .mbtn{background:var(--panel2);border:1px solid var(--edge);color:var(--dim);
+  font-size:11px;padding:5px 10px;border-radius:3px}
+.wmode .mbtn.on{background:var(--brass-dim);border-color:var(--brass);color:var(--bone)}
+.wmode .spacer{margin-left:auto}
+.wgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:6px}
+.wf{display:flex;flex-direction:column;gap:2px;background:var(--panel2);
+  border:1px solid var(--edge);border-radius:3px;padding:5px 7px}
+.wf.hot{border-color:var(--brass-dim)}
+.wf label{font-size:8.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.wf.hot label{color:var(--brass)}
+.wf input{background:transparent;border:none;color:var(--bone);font-family:var(--mono);
+  font-size:13px;width:100%;padding:1px 0;-moz-appearance:textfield}
+.wf input:focus{outline:none;color:var(--brass)}
+.wf input::-webkit-outer-spin-button,.wf input::-webkit-inner-spin-button{
+  -webkit-appearance:none;margin:0}
+.wf .hint{font-size:8px;color:var(--faint);letter-spacing:.04em}
+.wact{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:11px;
+  padding-top:11px;border-top:1px solid var(--edge)}
+.wact .scope{font-size:10.5px;color:var(--faint);line-height:1.5;flex-basis:100%}
+.wact .scope b{color:var(--brass)}
+.planbar{display:flex;gap:8px;align-items:center;margin-top:9px;font-family:var(--mono);font-size:11px}
+.planbar input[type=range]{flex:1;accent-color:var(--brass);max-width:220px}
+.planbar .pv{color:var(--brass);min-width:34px}
+.planbar .lbl{font-family:var(--ui);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--faint)}
+.slot .flag.lk{border-color:var(--arcane);color:var(--arcane)}
+.slot.locked{border-color:var(--arcane-dim)}
+.lockrow{display:flex;gap:8px;padding:0 12px 12px}
+.lockrow button{flex:1;background:var(--panel2);border:1px solid var(--edge);
+  border-radius:3px;padding:7px;font-size:11px;color:var(--dim)}
+.lockrow button.on{border-color:var(--arcane);color:var(--arcane)}
+.score{color:var(--brass);font-family:var(--mono)}
+.row-stat .hint{font-size:8px;letter-spacing:.1em;text-transform:uppercase;color:var(--faint)}
+
 /* ---------- header ---------- */
 header{
   border-bottom:1px solid var(--edge);
@@ -293,6 +330,14 @@ a{color:var(--brass-dim)}
 
 <div class="wrap">
   <div>
+    <section class="card" style="margin-bottom:18px">
+      <div class="card-h">
+        <h2>Best-in-slot weights</h2>
+        <div class="sub" id="wsub"></div>
+      </div>
+      <div class="wbody" id="wpanel"></div>
+    </section>
+
     <section class="card">
       <div class="card-h">
         <h2>Loadout</h2>
@@ -952,12 +997,18 @@ const state = {
   classes:["WAR","SHD","ROG"], race:"OGR",
   equipped:{},              // slotKey -> {itemId, xp, exalts:{type:srcItemId}}
   view:{mode:"slot", slot:null, exalt:null}, q:"", inEra:true,
-  sort:"fit",               // fit | weighted | AC | HP | MANA | STR... | ratio
+  sort:"bis",               // bis | fit | weighted | AC | HP | MANA | STR... | ratio
   /* Both filters are multi-select and deliberately GLOBAL, not per-slot: pick
      your four zones once and every slot you click stays inside them. Empty set
      means no filter — that's the difference between "none selected" and
      "everything selected", which for a farm route is the distinction you want. */
-  src:new Set(), zones:new Set(), zoneOpen:false, zoneQ:""
+  src:new Set(), zones:new Set(), zoneOpen:false, zoneQ:"",
+
+  /* --- BiS scoring --- */
+  wMode:"auto",             // auto = derived from classes | custom = the fields below
+  weights:null,             // filled by syncWeights() on first render
+  planTier:0,               // score everything as if it were sitting at this tier
+  locked:new Set()          // slot keys auto-equip must not touch
 };
 
 /* Items with no drop zone (vendor/craft/quest) still need somewhere to live in
@@ -1105,6 +1156,7 @@ function dropLine(item){
    minimum, which quietly favours items with many small stats over one big one.
    Worth knowing if you're squinting at the top of the list. */
 const SORTS = [
+  ["bis",      "BiS score (my weights)"],
   ["fit",      "Best fit (usable, then AC)"],
   ["weighted", "Best for my classes"],
   ["ratio",    "Weapon ratio (dmg/delay)"],
@@ -1126,9 +1178,10 @@ function weightFor(act){
   return w;
 }
 
-function sortKey(i, act){
+function sortKey(i, act, slotKey){
   const s = i.stats || {};
   switch(state.sort){
+    case "bis":      return slotScore(i, slotKey || state.view.slot);
     case "fit":      return s.AC || 0;
     case "ratio":    return i.dmg && i.delay ? i.dmg / i.delay : -1;
     case "sumattr":  return ATTRS.reduce((a,k) => a + (s[k]||0), 0);
@@ -1139,6 +1192,228 @@ function sortKey(i, act){
     }
     default:         return s[state.sort] || 0;
   }
+}
+
+/* ============================================================
+   BiS SCORING
+   One number per item, per slot, under one weight vector. The drawer's "BiS
+   score" sort and the auto-equip button read the same function, so the list
+   order IS the order auto-equip picks in — if you disagree with a pick, retune
+   a weight and watch both move together.
+
+   Weights are yours. The auto vector below is derived from chardata's
+   stat_weights (max across your trio, same rule the old "Best for my classes"
+   sort used) and is only a starting point — it is opinion, not game data.
+   ============================================================ */
+const W_STATS = ["AC","HP","MANA","STR","STA","AGI","DEX","WIS","INT","CHA"];
+const W_SPECIAL = [
+  ["RATIO",   "per 1.0 dmg/delay"],
+  ["OFFHAND", "share of offhand dmg that lands"],
+  ["EFFECT",  "each focus/proc/click/worn"],
+  ["WT",      "penalty per 1 weight"],
+];
+const W_KEYS = [...W_STATS, ...W_SPECIAL.map(([k]) => k)];
+
+const MELEE = new Set(["WAR","PAL","SHD","RNG","MNK","ROG","BRD","BER","BST"]);
+const DUAL  = new Set(["WAR","RNG","MNK","ROG","BRD","BER","BST"]);
+const isWeapon  = i => !!(i.dmg && i.delay);
+const isTwoHand = i => /^2H/i.test(i.skill || "");
+const effectCount = i => ["focus","proc","click","worn"].filter(t => i.effects?.[t]).length;
+
+/** the class-derived starting vector */
+function derivedWeights(){
+  const act = active(), w = {};
+  W_KEYS.forEach(k => w[k] = 0);
+  act.forEach(c => {
+    const t = CHAR.stat_weights?.[c] || {};
+    for(const [k,v] of Object.entries(t)) if(k in w) w[k] = Math.max(w[k], v);
+  });
+  /* No melee in the trio means nothing is meleeing, so a weapon's ratio is
+     worth nothing and both hands are pure stat sticks — which is why a caster
+     almost never wants a two-hander: it costs a whole slot of stats and returns
+     damage the build will not use. */
+  w.RATIO   = act.some(c => MELEE.has(c)) ? 100 : 0;
+  w.OFFHAND = 0.6;
+  w.EFFECT  = 3;
+  w.WT      = 0;
+  return w;
+}
+
+/** the vector actually in force */
+function activeWeights(){
+  return state.wMode === "custom" && state.weights ? state.weights : derivedWeights();
+}
+
+/** In auto mode the fields track your classes, so flipping to Custom starts
+    from exactly what you were just looking at rather than a stale vector. */
+function syncWeights(){
+  if(state.wMode !== "custom" || !state.weights) state.weights = derivedWeights();
+}
+
+/**
+ * Score one item for one slot, split into its three parts. Stats are scaled to
+ * `planTier` first, so the ranking answers "best once I've levelled it", not
+ * "best out of the box" — which matters because the +1-per-tier floor quietly
+ * favours items carrying several small stats over one big one.
+ *
+ * The split exists because an offhand is not worth a flat fraction of a
+ * mainhand. Its *stats* are worth exactly what they say — a +10 STA shield is
+ * +10 STA whether or not you ever swing it — while its *damage* is worth much
+ * less, because the offhand swings on a dual-wield check rather than every
+ * round. Discounting the whole score would quietly tax the stats too.
+ */
+function scoreParts(i, slotKey, w = activeWeights(), xp = TIER_XP[state.planTier] || 0){
+  const sc = scaledItem(i, xp);
+  let stat = 0;
+  for(const k of W_STATS) stat += (sc.stats[k] || 0) * (w[k] || 0);
+  if(w.WT && sc.wt != null) stat -= sc.wt * w.WT;
+  const weaponSlot = slotKey === "PRIMARY" || slotKey === "SECONDARY" ||
+                     slotKey === "RANGE"   || slotKey === "ANY1" || slotKey === "ANY2";
+  const ratio = (weaponSlot && sc.dmg && sc.delay) ? (sc.dmg / sc.delay) * (w.RATIO || 0) : 0;
+  const effect = effectCount(i) * (w.EFFECT || 0);
+  return {stat, ratio, effect, total:stat + ratio + effect};
+}
+const scoreItem = (i, slotKey, w, xp) => scoreParts(i, slotKey, w, xp).total;
+
+/** How much of an offhand's damage actually lands. Zero for anything that
+    can't dual wield at all — a paladin's offhand is a stat stick by definition,
+    so its shield competes on AC and nothing else. */
+function offhandFactor(w = activeWeights()){
+  return active().some(c => DUAL.has(c)) ? (w.OFFHAND ?? 0.6) : 0;
+}
+
+/** An offhand's worth: stats and effects in full, damage discounted. */
+function offhandValue(i, w = activeWeights(), xp){
+  const p = scoreParts(i, "SECONDARY", w, xp);
+  return p.stat + p.effect + p.ratio * offhandFactor(w);
+}
+
+/** The number a slot is actually ranked on — the browser list and auto-equip
+    share it, so the list order stays the order auto-equip picks in. */
+function slotScore(i, slotKey, w = activeWeights(), xp){
+  return slotKey === "SECONDARY" ? offhandValue(i, w, xp) : scoreItem(i, slotKey, w, xp);
+}
+
+/* ---------------- auto-equip ----------------
+   Greedy, one slot at a time, in the order below: PRIMARY before SECONDARY so
+   a two-hander can veto the offhand, everything before ANY1/ANY2 so the flex
+   slots take what's genuinely left over. Greedy is not optimal — a LORE piece
+   claimed by an early slot can't be reconsidered by a later one — but it is
+   predictable, and you can lock a slot to force the issue. */
+const AUTO_ORDER = ["PRIMARY","SECONDARY","RANGE","AMMO","HEAD","FACE","EAR1","EAR2",
+  "NECK","SHOULDERS","ARMS","BACK","WRIST1","WRIST2","HANDS","FINGER1","FINGER2",
+  "CHEST","LEGS","FEET","WAIST","ANY1","ANY2"];
+
+/** everything the current filters + rules allow into this slot, best first */
+function bisCandidates(slotKey, taken = new Set(), opts = {}){
+  const act = active(), w = activeWeights();
+  const twoHandUp = slotKey === "SECONDARY" && !opts.ignoreTwoHand && (() => {
+    const p = state.equipped.PRIMARY;
+    return p && byId[p.itemId] && isTwoHand(byId[p.itemId]);
+  })();
+  if(twoHandUp) return [];
+
+  let pool = DATA.items.filter(i => fitsSlot(i, slotKey));
+  if(state.inEra)      pool = pool.filter(i => !outOfEra(i));
+  if(state.src.size)   pool = pool.filter(i => (i.source||[]).some(s => state.src.has(s)));
+  if(state.zones.size) pool = pool.filter(i => zonesOf(i).some(z => state.zones.has(z)));
+  pool = pool.filter(i => usableBy(i.classes, act) && raceOk(i, state.race));
+  pool = pool.filter(i => {
+    const lore = i.tags.includes("LORE") || i.tags.includes("LORE_EQUIPPED");
+    return !(lore && taken.has(i.name));
+  });
+
+  /* A melee mainhand wants an actual weapon — a preference, not a filter, so a
+     thin pool still shows everything. The offhand needs no such rule: with its
+     damage discounted (and zeroed outright for a trio that can't dual wield) a
+     shield and a sword compete on the same number, and the better one wins. */
+  const prefer = (slotKey === "PRIMARY" && act.some(c => MELEE.has(c))) ? isWeapon : null;
+
+  return pool
+    .map(i => ({i, s:slotScore(i, slotKey, w), p:prefer ? (prefer(i) ? 1 : 0) : 0}))
+    .sort((a,b) => (b.p - a.p) || (b.s - a.s) || a.i.name.localeCompare(b.i.name));
+}
+
+/* ---------------- the hands, decided together ----------------
+   The one place greedy slot-at-a-time fails outright: a two-hander doesn't
+   just have to beat the best one-hander, it has to beat the one-hander PLUS
+   whatever the offhand would have held. Scoring PRIMARY alone never charges
+   the two-hander for the slot it eats, which flatters it every time. So both
+   hands are resolved as a pair, before either is committed. */
+function pickHands(taken = new Set()){
+  const w = activeWeights();
+  const lore = i => i.tags.includes("LORE") || i.tags.includes("LORE_EQUIPPED");
+  const prim = bisCandidates("PRIMARY", taken);
+  const twoH = prim.find(c => isTwoHand(c.i)) || null;
+  const oneH = prim.find(c => !isTwoHand(c.i)) || null;
+
+  let dw = null;
+  if(oneH){
+    /* the mainhand claims its own LORE before the offhand shops, or the same
+       sword fills both hands */
+    const t2 = new Set(taken);
+    if(lore(oneH.i)) t2.add(oneH.i.name);
+    const off = bisCandidates("SECONDARY", t2, {ignoreTwoHand:true})[0] || null;
+    dw = {primary:oneH, offhand:off, total:oneH.s + (off ? off.s : 0)};
+  }
+  const th = twoH ? {primary:twoH, offhand:null, total:twoH.s} : null;
+
+  if(dw && th) return dw.total >= th.total
+    ? {...dw, mode:"dual", rival:th.total} : {...th, mode:"two-hand", rival:dw.total};
+  if(dw) return {...dw, mode:"dual", rival:null};
+  if(th) return {...th, mode:"two-hand", rival:null};
+  return null;
+}
+
+/** @param fillOnly leave slots that already hold something alone */
+function autoBiS(fillOnly){
+  const xp = TIER_XP[state.planTier] || 0;
+  const taken = new Set();
+  const picked = [];
+
+  // locked slots (and, in fill mode, everything already equipped) claim their LORE first
+  for(const [k,e] of Object.entries(state.equipped)){
+    const keep = state.locked.has(k) || fillOnly;
+    const it = byId[e.itemId];
+    if(keep && it && (it.tags.includes("LORE") || it.tags.includes("LORE_EQUIPPED")))
+      taken.add(it.name);
+  }
+  if(!fillOnly) for(const k of Object.keys(state.equipped))
+    if(!state.locked.has(k)) delete state.equipped[k];
+
+  /* hands first, as a pair — see pickHands */
+  const handsFree = !state.locked.has("PRIMARY") && !state.locked.has("SECONDARY") &&
+                    !(fillOnly && (state.equipped.PRIMARY || state.equipped.SECONDARY));
+  if(handsFree){
+    const hands = pickHands(taken);
+    state.handChoice = hands ? {mode:hands.mode, total:hands.total, rival:hands.rival} : null;
+    if(hands){
+      const put = (k, c) => {
+        if(!c) return;
+        state.equipped[k] = {itemId:c.i.id, xp,
+          exalts:{ornament:null,focus:null,click:null,worn:null,proc:null}};
+        if(c.i.tags.includes("LORE") || c.i.tags.includes("LORE_EQUIPPED")) taken.add(c.i.name);
+        picked.push(`${k} ${c.i.name} (${c.s.toFixed(0)})`);
+      };
+      put("PRIMARY", hands.primary);
+      put("SECONDARY", hands.offhand);
+    }
+  }
+
+  for(const k of AUTO_ORDER){
+    if(state.locked.has(k)) continue;
+    if(fillOnly && state.equipped[k]) continue;
+    if(handsFree && (k === "PRIMARY" || k === "SECONDARY")) continue;
+    const best = bisCandidates(k, taken)[0];
+    if(!best) continue;
+    state.equipped[k] = {itemId:best.i.id, xp,
+      exalts:{ornament:null,focus:null,click:null,worn:null,proc:null}};
+    if(best.i.tags.includes("LORE") || best.i.tags.includes("LORE_EQUIPPED"))
+      taken.add(best.i.name);
+    picked.push(`${k} ${best.i.name} (${best.s.toFixed(0)})`);
+  }
+  state.lastAuto = picked;
+  render();
 }
 
 function statLine(i){
@@ -1156,6 +1431,11 @@ const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"
 function sortStat(i){
   const s = i.stats || {}, base = statLine(i);
   if(state.sort === "fit") return base;
+  if(state.sort === "bis"){
+    const v = slotScore(i, state.view.slot);
+    const cut = state.view.slot === "SECONDARY" && isWeapon(i) && offhandFactor() < 1;
+    return `<b class="score">${v.toFixed(0)}</b>${cut?`<span class="hint"> offhand</span>`:""}${base?" · "+base:""}`;
+  }
   if(state.sort === "weighted"){
     const v = sortKey(i, active());
     return `<b style="color:var(--brass)">${v.toFixed(0)}</b>${base?" · "+base:""}`;
@@ -1182,6 +1462,86 @@ function tagPills(i){
   return h;
 }
 
+/* ---------------- render: BiS weights ---------------- */
+function renderWeights(){
+  syncWeights();
+  const el = document.getElementById("wpanel");
+  const w = activeWeights(), custom = state.wMode === "custom";
+  const act = active();
+
+  document.getElementById("wsub").textContent =
+    custom ? "custom vector" : `derived from ${act.join(" / ") || "no classes"}`;
+
+  const field = (k, hint) => `<div class="wf ${w[k]?"hot":""}">
+    <label for="w_${k}">${k}</label>
+    <input type="number" id="w_${k}" data-w="${k}" step="0.1" value="${w[k] ?? 0}">
+    ${hint ? `<span class="hint">${hint}</span>` : ""}</div>`;
+
+  let h = `<div class="wmode">
+    <button class="mbtn ${custom?"":"on"}" data-wmode="auto">From my classes</button>
+    <button class="mbtn ${custom?"on":""}" data-wmode="custom">Custom</button>
+    <span class="spacer"></span>
+    <button class="mbtn" id="wreset" title="Copy the class-derived vector into the fields">Reset to class defaults</button>
+  </div>`;
+
+  h += `<div class="wgrid">${W_STATS.map(k => field(k)).join("")}
+    ${W_SPECIAL.map(([k,hint]) => field(k, hint)).join("")}</div>`;
+
+  h += `<div class="planbar"><span class="lbl">Score at tier</span>
+    <input type="range" id="ptier" min="0" max="10" value="${state.planTier}">
+    <span class="pv">+${state.planTier}</span>
+    <span class="lbl" style="letter-spacing:.04em;text-transform:none">
+      ranks items as if levelled this far</span></div>`;
+
+  const filters = [];
+  if(state.zones.size) filters.push(`<b>${state.zones.size} zone${state.zones.size===1?"":"s"}</b>`);
+  if(state.src.size)   filters.push(`<b>${[...state.src].join(", ")}</b>`);
+  if(state.inEra)      filters.push(`in-era only`);
+  if(state.locked.size)filters.push(`<b>${state.locked.size} locked slot${state.locked.size===1?"":"s"}</b> untouched`);
+
+  h += `<div class="wact">
+    <button class="btn btn-brass" id="autobis">Auto-equip BiS</button>
+    <button class="btn" id="fillbis">Fill empty slots only</button>
+    <button class="btn" id="clearall">Clear loadout</button>
+    <div class="scope">Picks run through the same filters as the browser${
+      filters.length ? " — currently " + filters.join(" · ") : ", and nothing is filtered right now"
+    }. Class, race and LORE are enforced; a two-hander in Primary skips Secondary.
+    ${state.lastAuto?.length ? `<br><span style="color:var(--dim)">Last run filled ${state.lastAuto.length} slot${state.lastAuto.length===1?"":"s"}.</span>` : ""}</div>
+  </div>`;
+
+  el.innerHTML = h;
+
+  el.querySelectorAll("[data-wmode]").forEach(b => b.onclick = () => {
+    state.wMode = b.dataset.wmode; render();
+  });
+  document.getElementById("wreset").onclick = () => {
+    state.weights = derivedWeights(); state.wMode = "custom"; render();
+  };
+  el.querySelectorAll("[data-w]").forEach(inp => {
+    inp.onchange = () => {
+      syncWeights();
+      state.weights = {...activeWeights(), [inp.dataset.w]:(+inp.value || 0)};
+      state.wMode = "custom";
+      render();
+      const n = document.getElementById("w_" + inp.dataset.w);
+      if(n){ n.focus(); n.select(); }
+    };
+  });
+  const pt = document.getElementById("ptier");
+  pt.oninput = () => {
+    state.planTier = +pt.value;
+    el.querySelector(".pv").textContent = "+" + state.planTier;
+  };
+  pt.onchange = () => render();
+
+  document.getElementById("autobis").onclick = () => autoBiS(false);
+  document.getElementById("fillbis").onclick = () => autoBiS(true);
+  document.getElementById("clearall").onclick = () => {
+    for(const k of Object.keys(state.equipped)) if(!state.locked.has(k)) delete state.equipped[k];
+    state.lastAuto = null; render();
+  };
+}
+
 /* ---------------- render: paper doll ---------------- */
 function renderDoll(){
   const act = active(), errs = {};
@@ -1201,7 +1561,8 @@ function renderDoll(){
     const e = state.equipped[s.k], it = e && byId[e.itemId];
     const sel = state.view.slot === s.k;
     const cls = ["slot", it ? "filled" : "", sel ? "sel" : "",
-                 s.a === "*" ? "any" : "", errs[s.k] ? "bad" : ""].join(" ");
+                 s.a === "*" ? "any" : "", errs[s.k] ? "bad" : "",
+                 state.locked.has(s.k) ? "locked" : ""].join(" ");
     let inner = `<div class="slot-name">${s.n}</div>`;
     if(it){
       inner += `<div class="slot-item">${esc(it.name)}</div><div class="slot-meta">
@@ -1210,6 +1571,7 @@ function renderDoll(){
           `<span class="gem ${e.exalts[x.k] || (x.k==='ornament'&&e.exalts.ornament) ? "on" : ""} ${x.k==='ornament'?'orn':''}"></span>`).join("")}</span>
         ${errs[s.k] ? `<span class="flag err">!</span>` : ""}
         ${(it.tags.includes("LORE")||it.tags.includes("LORE_EQUIPPED")) ? `<span class="flag lore">Lore</span>` : ""}
+        ${state.locked.has(s.k) ? `<span class="flag lk">lock</span>` : ""}
       </div>`;
     } else {
       inner += `<div class="slot-empty">${s.a === "*" ? "flex — anything" : "empty"}</div>`;
@@ -1471,6 +1833,44 @@ function renderDrawer(){
 
     if(it.crafted_by?.length)
       h += `<div class="note"><b>Player crafted.</b> ${it.crafted_by.slice(0,3).map(esc).join("<br>")}</div>`;
+    /* how this piece rates against what else could sit here, under your weights */
+    const rivals = bisCandidates(slot, new Set(), {ignoreTwoHand:true})
+      .filter(c => c.i.id !== it.id).slice(0, 3);
+    const mine = slotScore(it, slot);
+    h += `<div class="note"><b>${slot === "SECONDARY" ? "Offhand value" : "BiS score"}
+      ${mine.toFixed(0)}</b> at +${state.planTier}, under your
+      ${state.wMode === "custom" ? "custom" : "class-derived"} weights.
+      ${slot === "SECONDARY" && isWeapon(it)
+        ? `Damage counted at ${(offhandFactor()*100).toFixed(0)}%${offhandFactor()?"":" — nothing in this trio dual wields"}; stats and effects in full. `
+        : ""}
+      ${rivals.length ? "Next best here: " + rivals.map(r =>
+        `${esc(r.i.name)} <span class="score">${r.s.toFixed(0)}</span>`).join(" · ") +
+        "." : "Nothing else passes the current filters for this slot."}</div>`;
+
+    /* the pair comparison, shown from either hand */
+    if(slot === "PRIMARY" || slot === "SECONDARY"){
+      const hands = pickHands();
+      if(hands && hands.rival != null){
+        /* "dual wield" only if the trio can actually dual wield AND the offhand
+           is a weapon — a paladin holding a shield, or a wizard holding a second
+           wand, is a one-hand-plus-offhand build, not a dual wield one. */
+        const win = hands.mode === "two-hand" ? "Two-hander"
+          : (offhandFactor() > 0 && hands.offhand && isWeapon(hands.offhand.i))
+            ? "Dual wield" : "One-hand + offhand";
+        h += `<div class="note ${hands.mode === "dual" ? "" : "warn"}">
+          <b>${win} wins these two slots: ${hands.total.toFixed(0)} vs ${hands.rival.toFixed(0)}.</b>
+          ${hands.mode === "dual"
+            ? `${esc(hands.primary.i.name)}${hands.offhand?` + ${esc(hands.offhand.i.name)}`:" with an empty offhand"} —
+               a two-hander has to beat both hands together, not just the mainhand.`
+            : `${esc(hands.primary.i.name)} out-scores the best pair, so the offhand stays empty.`}
+          Auto-equip resolves both hands together; lock a slot to overrule it.</div>`;
+      }
+    }
+
+    h += `<div class="lockrow"><button id="lockslot" class="${state.locked.has(slot)?"on":""}">
+      ${state.locked.has(slot) ? "Locked — auto-equip skips this slot" : "Lock this slot against auto-equip"}
+    </button></div>`;
+
     h += `<button class="row" id="unequip" style="color:var(--bad)"><div class="row-top"><span class="row-name">Remove ${esc(it.name)}</span></div></button>`;
     h += `<div class="data-note">Source: <a href="${it.url}" target="_blank" rel="noopener">${it.url.replace("https://","")}</a></div>`;
 
@@ -1499,7 +1899,12 @@ function renderDrawer(){
     d.querySelectorAll("[data-clr]").forEach(b => b.onclick = ev => {
       ev.stopPropagation(); entry.exalts[b.dataset.clr] = null; render();
     });
-    document.getElementById("unequip").onclick = () => { delete state.equipped[slot]; render(); };
+    document.getElementById("lockslot").onclick = () => {
+      state.locked.has(slot) ? state.locked.delete(slot) : state.locked.add(slot);
+      render();
+    };
+    document.getElementById("unequip").onclick = () => {
+      delete state.equipped[slot]; state.locked.delete(slot); render(); };
     return;
   }
 
@@ -1651,7 +2056,7 @@ function renderDataNote(){
 }
 
 /* ---------------- boot ---------------- */
-function render(){ renderDoll(); renderTotals(); renderZoneSum(); renderChar(); renderLog(); renderDrawer(); renderDataNote();
+function render(){ renderWeights(); renderDoll(); renderTotals(); renderZoneSum(); renderChar(); renderLog(); renderDrawer(); renderDataNote();
   document.getElementById("dollsub").textContent =
     `${Object.keys(state.equipped).length}/${SLOTS.length} slots · ${active().join(" / ")}`;
 }
@@ -1711,8 +2116,12 @@ function initControls(){
     rd.readAsText(file);
   };
 }
-initControls();
-async function autoLoadHostedData() {
+
+
+
+
+
+  async function autoLoadHostedData() {
   try {
     const itemRes = await fetch('./items.json');
     if (itemRes.ok) {
@@ -1745,8 +2154,6 @@ async function autoLoadHostedData() {
 }
 
 autoLoadHostedData();
-
-  
 </script>
 </body>
 </html>
