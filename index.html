@@ -1712,7 +1712,41 @@ function initControls(){
   };
 }
 initControls();
-render();
+
+async function autoLoadHostedData() {
+  try {
+    // 1. Try to fetch the items data
+    const itemRes = await fetch('items.json');
+    if (itemRes.ok) {
+      const j = await itemRes.json();
+      const items = Array.isArray(j) ? j : j.items;
+      DATA = {source: j.source || "GitHub Pages Hosted", scraped: j.scraped, items: items, seed: false};
+      reindex();
+    } else {
+      console.warn("items.json not found. Falling back to built-in seed.");
+    }
+
+    // 2. Try to fetch the character data
+    const charRes = await fetch('chardata.json');
+    if (charRes.ok) {
+      CHAR = await charRes.json();
+    } else {
+      console.warn("chardata.json not found. Falling back to default attributes.");
+    }
+  } catch (err) {
+    console.error("Network error fetching data. Check your file paths:", err);
+  }
+  
+  // 3. Render the UI with the newly loaded data
+  render();
+}
+
+// Kick off the auto-load
+autoLoadHostedData();
+
+
+
+  
 </script>
 </body>
 </html>
