@@ -1695,14 +1695,81 @@ function renderLog(){
 }
 
 /* ---------------- render: drawer ---------------- */
+/* ---------------- zone facet (shared) ----------------
+   state.zones is global, not per-slot, so the control renders in every drawer
+   view: pick your route once — with nothing selected if you like — and every
+   slot you click afterwards stays inside it. */
+function countZones(pool){
+  const c = {};
+  pool.forEach(i => zonesOf(i).forEach(z => c[z] = (c[z]||0)+1));
+  return c;
+}
+/* Counts for the views that aren't scoped to one slot: the whole database,
+   minus out-of-era gear if that toggle is on. */
+function allZoneCounts(){
+  return countZones(state.inEra ? DATA.items.filter(i => !outOfEra(i)) : DATA.items);
+}
+function zoneFacetHTML(zoneCounts, emptyMsg = "No zone data loaded."){
+  const zAll = Object.entries(zoneCounts)
+    .sort((a,b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  let h = `<div class="fbar">
+    <button class="fbtn ${state.zones.size?"on":""}" id="zbtn">
+      <span>${state.zones.size ? `Zones · ${state.zones.size} selected` : "Zones · all"}</span>
+      <span class="cnt">${state.zoneOpen?"▴":"▾"} ${zAll.length}</span></button>
+    ${state.zones.size?`<button class="clr" id="zclr">clear</button>`:""}</div>`;
+
+  if(state.zoneOpen){
+    const q = state.zoneQ.toLowerCase();
+    let list = zAll.filter(([z]) => !q || z.toLowerCase().includes(q));
+    const CAPZ = 60, over = Math.max(0, list.length - CAPZ);
+    list = list.slice(0, CAPZ);
+    /* A selected zone must stay visible even when the current view has nothing
+       in it, or you can't untick it without clearing the whole filter. */
+    for(const z of state.zones)
+      if(!list.some(([n]) => n === z)) list.push([z, zoneCounts[z] || 0]);
+    h += `<div class="zpanel">
+      <input type="search" id="zq" placeholder="Find a zone…" value="${esc(state.zoneQ)}">
+      <div class="zlist">${list.map(([z,n]) =>
+        `<button class="zchip ${state.zones.has(z)?"on":""} ${n?"":"dim"}" data-zone="${esc(z)}">
+          ${esc(z)} <span class="n">${n}</span></button>`).join("")}
+        ${over?`<div class="zmore">+${over} more — type above to narrow.</div>`:""}
+        ${zAll.length?"":`<div class="zmore">${emptyMsg}</div>`}</div></div>`;
+  }
+  return h;
+}
+function wireZoneFacet(d){
+  const zb = document.getElementById("zbtn");
+  if(zb) zb.onclick = () => { state.zoneOpen = !state.zoneOpen; renderDrawer(); };
+  const zc = document.getElementById("zclr");
+  if(zc) zc.onclick = () => { state.zones.clear(); render(); };
+  d.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => {
+    const z = b.dataset.zone;
+    state.zones.has(z) ? state.zones.delete(z) : state.zones.add(z);
+    render();                       // totals summary tracks the filter too
+  });
+  const zq = document.getElementById("zq");
+  if(zq) zq.oninput = () => { state.zoneQ = zq.value; renderDrawer();
+    const n = document.getElementById("zq"); n.focus(); n.setSelectionRange(n.value.length,n.value.length); };
+}
+/* The "you are filtered" reminder, shown wherever the facet is. */
+function zoneFilterNote(){
+  return state.zones.size
+    ? `<div class="note"><b>Filtered to ${state.zones.size} zone${state.zones.size===1?"":"s"}:</b>
+       ${[...state.zones].map(esc).join(" · ")}.<br>This sticks as you click through slots — build the whole set out of one route, then clear it.</div>`
+    : "";
+}
+
 function renderDrawer(){
   const d = document.getElementById("drawer");
   const {slot, exalt} = state.view;
 
   if(!slot){
     document.getElementById("dtitle").textContent = "Browser";
-    document.getElementById("dsub").textContent = "";
-    d.innerHTML = `<div class="empty"><b>Pick a slot</b>Click any slot on the left to see the gear that fits it, filtered to your classes and race.</div>`;
+    document.getElementById("dsub").textContent =
+      state.zones.size ? `${state.zones.size} zone${state.zones.size===1?"":"s"} filtered` : "";
+    d.innerHTML = zoneFacetHTML(allZoneCounts()) + zoneFilterNote() +
+      `<div class="empty"><b>Pick a slot</b>Click any slot on the left to see the gear that fits it, filtered to your classes and race. Set your zones above first and every slot stays inside that route.</div>`;
+    wireZoneFacet(d);
     return;
   }
   const sdef = SLOTS.find(s => s.k === slot);
@@ -1787,7 +1854,10 @@ function renderDrawer(){
     ["proc","click","worn"].forEach(t => { if(it.effects?.[t])
       tip += `<span class="t-eff">Effect: ${esc(it.effects[t].name)} (${esc(it.effects[t].detail||t)})</span>\n`; });
 
-    let h = `<div class="tip"><div class="tip-name">${esc(it.name)}</div><pre>${tip.trim()}</pre></div>`;
+    /* Facet stays reachable while inspecting a piece — you often want to widen
+       the route before hopping to the next slot. */
+    let h = zoneFacetHTML(allZoneCounts()) + zoneFilterNote();
+    h += `<div class="tip"><div class="tip-name">${esc(it.name)}</div><pre>${tip.trim()}</pre></div>`;
 
     const tier = eff.sc.tier;
     h += `<div class="rail"><div class="rail-h"><h3>Tier</h3>
@@ -1875,6 +1945,7 @@ function renderDrawer(){
     h += `<div class="data-note">Source: <a href="${it.url}" target="_blank" rel="noopener">${it.url.replace("https://","")}</a></div>`;
 
     d.innerHTML = h;
+    wireZoneFacet(d);
     const setXp = v => {
       entry.xp = Math.max(0, Math.min(MAX_XP, v));
       const t = tierOf(entry.xp);
@@ -1953,31 +2024,7 @@ function renderDrawer(){
   let h = `<div class="search"><input type="search" id="q" placeholder="Filter by name, zone or mob…" value="${esc(state.q)}"></div>`;
 
   /* ---- zone facet ---- */
-  const zAll = Object.entries(zoneCounts)
-    .sort((a,b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  h += `<div class="fbar">
-    <button class="fbtn ${state.zones.size?"on":""}" id="zbtn">
-      <span>${state.zones.size ? `Zones · ${state.zones.size} selected` : "Zones · all"}</span>
-      <span class="cnt">${state.zoneOpen?"▴":"▾"} ${zAll.length}</span></button>
-    ${state.zones.size?`<button class="clr" id="zclr">clear</button>`:""}</div>`;
-
-  if(state.zoneOpen){
-    const q = state.zoneQ.toLowerCase();
-    let list = zAll.filter(([z]) => !q || z.toLowerCase().includes(q));
-    const CAPZ = 60, over = Math.max(0, list.length - CAPZ);
-    list = list.slice(0, CAPZ);
-    /* A selected zone must stay visible even when this slot has nothing in it,
-       or you can't untick it without clearing the whole filter. */
-    for(const z of state.zones)
-      if(!list.some(([n]) => n === z)) list.push([z, zoneCounts[z] || 0]);
-    h += `<div class="zpanel">
-      <input type="search" id="zq" placeholder="Find a zone…" value="${esc(state.zoneQ)}">
-      <div class="zlist">${list.map(([z,n]) =>
-        `<button class="zchip ${state.zones.has(z)?"on":""} ${n?"":"dim"}" data-zone="${esc(z)}">
-          ${esc(z)} <span class="n">${n}</span></button>`).join("")}
-        ${over?`<div class="zmore">+${over} more — type above to narrow.</div>`:""}
-        ${zAll.length?"":`<div class="zmore">No zone data for this slot.</div>`}</div></div>`;
-  }
+  h += zoneFacetHTML(zoneCounts, "No zone data for this slot.");
 
   h += `<div class="sortbar"><label for="sort">Sort</label><select id="sort">${SORTS.map(([k,l]) =>
       `<option value="${k}" ${state.sort===k?"selected":""}>${l}</option>`).join("")}</select></div>
@@ -1986,9 +2033,7 @@ function renderDrawer(){
       <button class="chip era ${state.inEra?"on":""}" id="erachip" title="Hide Kunark/Velious gear that isn't in EQ Legends yet">
         ${state.inEra ? `In era only${hiddenEra?` · ${hiddenEra} hidden`:""}` : "Showing out-of-era"}</button></div>`;
 
-  if(state.zones.size)
-    h += `<div class="note"><b>Filtered to ${state.zones.size} zone${state.zones.size===1?"":"s"}:</b>
-      ${[...state.zones].map(esc).join(" · ")}.<br>This sticks as you click through slots — build the whole set out of one route, then clear it.</div>`;
+  h += zoneFilterNote();
   if(sdef.a === "*")
     h += `<div class="note"><b>Any slot.</b> Takes any equippable item at full stats — a second shield for AC, a spare breastplate, a boot dagger for backstab. Class and race rules still apply.</div>`;
 
@@ -2017,18 +2062,7 @@ function renderDrawer(){
   const so = document.getElementById("sort");
   if(so) so.onchange = () => { state.sort = so.value; renderDrawer(); };
 
-  const zb = document.getElementById("zbtn");
-  if(zb) zb.onclick = () => { state.zoneOpen = !state.zoneOpen; renderDrawer(); };
-  const zc = document.getElementById("zclr");
-  if(zc) zc.onclick = () => { state.zones.clear(); render(); };
-  d.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => {
-    const z = b.dataset.zone;
-    state.zones.has(z) ? state.zones.delete(z) : state.zones.add(z);
-    render();                       // totals summary tracks the filter too
-  });
-  const zq = document.getElementById("zq");
-  if(zq) zq.oninput = () => { state.zoneQ = zq.value; renderDrawer();
-    const n = document.getElementById("zq"); n.focus(); n.setSelectionRange(n.value.length,n.value.length); };
+  wireZoneFacet(d);
   d.querySelectorAll("[data-srcf]").forEach(b => b.onclick = () => {
     const k = b.dataset.srcf;
     state.src.has(k) ? state.src.delete(k) : state.src.add(k);
