@@ -1712,39 +1712,39 @@ function initControls(){
   };
 }
 initControls();
-
 async function autoLoadHostedData() {
   try {
-    // 1. Try to fetch the items data
-    const itemRes = await fetch('items.json');
+    const itemRes = await fetch('./items.json');
     if (itemRes.ok) {
       const j = await itemRes.json();
-      const items = Array.isArray(j) ? j : j.items;
-      DATA = {source: j.source || "GitHub Pages Hosted", scraped: j.scraped, items: items, seed: false};
+      console.log("Successfully parsed JSON data:", j); // Check your console for this!
+      
+      const items = Array.isArray(j) ? j : (j.items || []);
+      DATA = {
+        source: j.source || "GitHub Pages Hosted", 
+        scraped: j.scraped || new Date().toISOString(), 
+        items: items, 
+        seed: false
+      };
       reindex();
     } else {
-      console.warn("items.json not found. Falling back to built-in seed.");
+      console.warn("items.json not found. status:", itemRes.status);
     }
 
-    // 2. Try to fetch the character data
-    const charRes = await fetch('chardata.json');
+    const charRes = await fetch('./chardata.json');
     if (charRes.ok) {
       CHAR = await charRes.json();
     } else {
-      console.warn("chardata.json not found. Falling back to default attributes.");
+      console.warn("chardata.json not found. Using defaults.");
     }
   } catch (err) {
-    console.error("Network error fetching data. Check your file paths:", err);
+    console.error("Error processing hosted data:", err);
   }
   
-  // 3. Render the UI with the newly loaded data
   render();
 }
 
-// Kick off the auto-load
 autoLoadHostedData();
-
-
 
   
 </script>
