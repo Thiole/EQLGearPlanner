@@ -2475,6 +2475,7 @@ function renderWeights(){
     <button class="btn" id="fillbis">Fill empty slots only</button>
     <button class="btn" id="fillex" title="Socket the best legal focus/click/worn/proc into everything you're wearing">Fill exaltations</button>
     <button class="btn" id="clearall">Clear loadout</button>
+    <button class="btn" id="forget" title="Wipe the saved setup from this browser and start clean on the next refresh">Forget saved setup</button>
     <div class="scope">Picks run through the same filters as the browser${
       filters.length ? " — currently " + filters.join(" · ") : ", and nothing is filtered right now"
     }. Class, race and LORE are enforced; a two-hander in Primary skips Secondary;
@@ -2483,7 +2484,17 @@ function renderWeights(){
       state.lastExalt?.length ? ` and socketed ${state.lastExalt.length} exaltation${state.lastExalt.length===1?"":"s"}` : ""}.</span>` : ""}
     ${state.lastExalt && !state.lastExalt.length && state.planTier < 1
       ? `<br><span style="color:var(--faint)">No exaltations socketed — the first socket unlocks at +1, so raise "Score at tier".</span>` : ""}
-    ${state.exaltSkipped ? `<br><span style="color:var(--faint)">${state.exaltSkipped} socket${state.exaltSkipped===1?"":"s"} left empty — every legal source there duplicates a family you already cover, and exaltations don't stack.</span>` : ""}</div>
+    ${state.exaltSkipped ? `<br><span style="color:var(--faint)">${state.exaltSkipped} socket${state.exaltSkipped===1?"":"s"} left empty — every legal source there duplicates a family you already cover, and exaltations don't stack.</span>` : ""}
+    <br><span style="color:var(--faint)">${
+      state.saveOff ? `Saved setup wiped — nothing further is stored this session.`
+      : DATA.seed ? `Not saving — running on the built-in seed, so equipped items couldn't be restored anyway.`
+      : `Setup saves to this browser automatically.${
+          state.restored ? ` Restored ${state.restored.n} slot${state.restored.n===1?"":"s"} on load.` : ""
+        }${
+          state.restored?.dropped.length
+            ? ` <span style="color:var(--bad)">${state.restored.dropped.length} saved entr${state.restored.dropped.length===1?"y":"ies"} no longer exist${state.restored.dropped.length===1?"s":""} in this item database and ${state.restored.dropped.length===1?"was":"were"} dropped.</span>`
+            : ""
+        }`}</span></div>
   </div>`;
 
   el.innerHTML = h;
@@ -2527,6 +2538,16 @@ function renderWeights(){
   document.getElementById("clearall").onclick = () => {
     for(const k of Object.keys(state.equipped)) if(!state.locked.has(k)) delete state.equipped[k];
     state.lastAuto = null; render();
+  };
+  /* Deliberately does not touch the live state — this wipes the SAVE, so what
+     you're looking at survives until you refresh. Clearing both at once makes
+     it impossible to tell which of the two things the button did. */
+  document.getElementById("forget").onclick = () => {
+    if(!confirm("Forget the saved setup?\n\nThis browser will start clean on the next refresh, and nothing more is saved this session. What's on screen right now is untouched.")) return;
+    forgetState();
+    clearTimeout(saveTimer);
+    state.saveOff = true;
+    render();
   };
 }
 
@@ -3131,6 +3152,129 @@ function renderDataNote(){
        <br><br>Tier 0-10 stats are computed here from each item's tier-0 block, not read from the file — the wiki only ever lists tier 0. ${DATA.tiers_included?"This file also carries a baked <code>tiers</code> array; the planner ignores it and recomputes.":""}`;
 }
 
+/* ---------------- persistence ----------------
+   A refresh used to cost you everything: classes, race, era, filters, weights
+   and a fully fitted loadout. None of that is expensive to recompute, but all
+   of it is expensive to re-ENTER, which is the part that matters.
+
+   Only the setup is stored. items.json is fetched fresh on every boot (it's
+   10MB — well past any localStorage quota, and it's sitting right next to this
+   file anyway), so what goes in here is a few kilobytes of choices plus a list
+   of item IDs pointing into whatever database happens to load next time.
+
+   That pointer is the whole risk. Re-run the scraper and an item can vanish or
+   be renamed, so every restored ID is checked against byId and silently
+   dropped if it no longer resolves — which is why restoreState() must run
+   AFTER the fetch, not before. Same for every other field: a stored value that
+   is no longer a legal option is discarded rather than trusted, because a
+   planner that boots into a state its own rules reject is worse than one that
+   boots clean. */
+const STORE_KEY = "eql-bis:v1";
+const PERSIST_SETS  = ["src","zones","locked"];
+const PERSIST_PLAIN = ["classes","race","equipped","era","inEra","sort",
+                       "wMode","weights","planTier","handMode"];
+
+/* Deliberately NOT saved: view (reopening a drawer on refresh is disorienting),
+   q / zoneQ / zoneOpen (transient typing), and lastAuto / lastExalt /
+   handChoice, which are reports about a run that didn't happen this session. */
+
+let saveTimer = null;
+function saveState(){
+  /* Never overwrite a good save with a bad one. If items.json failed to load
+     we're on the built-in seed, every restored ID has just been dropped as
+     unresolvable, and writing that back would turn a temporary network blip
+     into permanent data loss. */
+  if(DATA.seed) return;
+  /* Set by "Forget saved setup". Without it the very next render would write
+     the current state straight back and the button would do nothing at all. */
+  if(state.saveOff) return;
+  try{
+    const out = {v:1};
+    PERSIST_PLAIN.forEach(k => out[k] = state[k]);
+    PERSIST_SETS.forEach(k => out[k] = [...state[k]]);
+    localStorage.setItem(STORE_KEY, JSON.stringify(out));
+  }catch(e){
+    /* Private browsing, a full quota, or a browser that blocks storage on
+       file://. Losing the save is annoying; throwing here would take the whole
+       render down with it. */
+    console.warn("Couldn't save setup:", e.message);
+  }
+}
+const queueSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(saveState, 400); };
+
+function forgetState(){
+  try{ localStorage.removeItem(STORE_KEY); }catch(e){}
+  state.restored = null;
+}
+
+function restoreState(){
+  let raw;
+  try{ raw = localStorage.getItem(STORE_KEY); }catch(e){ return; }
+  if(!raw) return;
+  let j;
+  try{ j = JSON.parse(raw); }catch(e){ forgetState(); return; }
+  if(!j || j.v !== 1){ forgetState(); return; }
+
+  const dropped = [];
+  const legalSlot = new Set(SLOTS.map(s => s.k));
+  const legalSort = new Set(SORTS.map(([k]) => k));
+  const legalExalt = new Set(EXALTS.map(x => x.k));
+  const legalHand = new Set(HAND_MODES.map(m => m[0]));
+
+  if(Array.isArray(j.classes))
+    state.classes = [0,1,2].map(n => CLASSES[j.classes[n]] ? j.classes[n] : "");
+  if(RACES[j.race])            state.race = j.race;
+  if(ERA_IX[j.era] != null)    state.era = j.era;
+  if(typeof j.inEra === "boolean") state.inEra = j.inEra;
+  if(legalSort.has(j.sort))    state.sort = j.sort;
+  if(legalHand.has(j.handMode))state.handMode = j.handMode;
+  if(j.wMode === "auto" || j.wMode === "custom") state.wMode = j.wMode;
+  if(Number.isFinite(j.planTier))
+    state.planTier = Math.max(0, Math.min(10, Math.round(j.planTier)));
+
+  /* Weights are keyed by stat, so a renamed or removed key is skipped rather
+     than restored as a stray field the UI never shows but scoreParts reads. */
+  if(j.weights && typeof j.weights === "object"){
+    const w = {};
+    W_KEYS.forEach(k => { if(Number.isFinite(j.weights[k])) w[k] = j.weights[k]; });
+    if(Object.keys(w).length) state.weights = w;
+  }
+
+  /* A zone that no longer exists in the database would filter every slot down
+     to nothing, with no visible cause — the panel would just show empty lists.
+     Better to drop it and say so. */
+  if(Array.isArray(j.zones)){
+    const live = new Set();
+    DATA.items.forEach(i => zonesOf(i).forEach(z => live.add(z)));
+    j.zones.forEach(z => live.has(z) ? state.zones.add(z) : dropped.push(`zone ${z}`));
+  }
+  if(Array.isArray(j.src)) j.src.forEach(s => state.src.add(s));
+  if(Array.isArray(j.locked))
+    j.locked.forEach(k => { if(legalSlot.has(k)) state.locked.add(k); });
+
+  if(j.equipped && typeof j.equipped === "object"){
+    for(const [k, e] of Object.entries(j.equipped)){
+      if(!legalSlot.has(k) || !e || !byId[e.itemId]){
+        if(e && e.itemId) dropped.push(e.itemId);
+        continue;
+      }
+      const exalts = {ornament:null, focus:null, click:null, worn:null, proc:null};
+      for(const [t, src] of Object.entries(e.exalts || {}))
+        if(legalExalt.has(t) && byId[src]) exalts[t] = src;
+      state.equipped[k] = {
+        itemId: e.itemId,
+        xp: Math.max(0, Math.min(MAX_XP, Math.round(+e.xp || 0))),
+        exalts
+      };
+    }
+  }
+  /* Locks on slots that ended up empty are meaningless and would quietly stop
+     auto-equip from ever filling them. */
+  [...state.locked].forEach(k => { if(!state.equipped[k]) state.locked.delete(k); });
+
+  state.restored = {n:Object.keys(state.equipped).length, dropped};
+}
+
 /* ---------------- boot ---------------- */
 function renderEraNote(){
   const el = document.getElementById("eranow");
@@ -3145,6 +3289,11 @@ function renderEraNote(){
 function render(){ renderEraNote(); renderWeights(); renderZones(); renderDoll(); renderTotals(); renderZoneSum(); renderChar(); renderLog(); renderDrawer(); renderDataNote();
   document.getElementById("dollsub").textContent =
     `${Object.keys(state.equipped).length}/${SLOTS.length} slots · ${active().join(" / ")}`;
+  /* Every mutation in this app ends in a render(), so hanging the save here
+     means no future change can forget to persist itself. Debounced because
+     typing in a weight field re-renders on each keystroke and localStorage
+     writes are synchronous. */
+  queueSave();
 }
 
 function initControls(){
@@ -3256,6 +3405,12 @@ async function autoLoadHostedData(){
       console.warn("chardata.json unavailable, using defaults:", e.message);
     }
   } finally {
+    /* Order matters twice over. restoreState() reads byId, so it has to follow
+       the fetch or every equipped ID would be dropped as unresolvable. And
+       initControls() seeds the class/race/era dropdowns from state, so it has
+       to follow the restore or the selects would show defaults while the
+       planner scored a different trio underneath. */
+    restoreState();
     initControls();
     render();
   }
