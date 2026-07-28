@@ -100,6 +100,11 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 .wf input::-webkit-outer-spin-button,.wf input::-webkit-inner-spin-button{
   -webkit-appearance:none;margin:0}
 .wf .hint{font-size:8px;color:var(--faint);letter-spacing:.04em}
+.handbar{margin-top:9px;margin-bottom:4px}
+.handbar .lbl{font-family:var(--ui);font-size:9px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--faint);margin-right:2px}
+.handnote{font-size:10.5px;color:var(--faint);line-height:1.5}
+.handnote b{color:var(--brass)}
 .wact{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:11px;
   padding-top:11px;border-top:1px solid var(--edge)}
 .wact .scope{font-size:10.5px;color:var(--faint);line-height:1.5;flex-basis:100%}
@@ -1275,7 +1280,15 @@ const state = {
      autoExaltAll to fill. At +0 the auto-equip looked like it was ignoring
      exaltations entirely, because nothing was unlocked yet. */
   planTier:4,               // score everything as if it were sitting at this tier
-  locked:new Set()          // slot keys auto-equip must not touch
+  locked:new Set(),         // slot keys auto-equip must not touch
+
+  /* How the two hands are allowed to be filled. "auto" is the original
+     behaviour and stays the default: pickHands() prices a two-hander against
+     the best one-hand pair and takes whichever wins. The other three are
+     overrides — you have decided the shape of the build and want the best gear
+     THAT FITS IT, which is a different question and often a different answer.
+     Nothing here changes unless you touch the selector. */
+  handMode:"auto"           // auto | twohand | shield | dual
 };
 
 /* Items with no drop zone (vendor/craft/quest) still need somewhere to live in
@@ -1317,6 +1330,56 @@ const raceOk = (item, race) => {
   return r.includes(race);
 };
 const showList = l => isAllExcept(l) ? "ALL except " + excluded(l).join(" ") : l.join(" ");
+
+/* ---------------- who can conjure it ----------------
+   A summoned item does not exist until somebody casts the spell that makes it,
+   and the wiki does not record who that somebody is. What it records is the
+   class list, which answers a DIFFERENT question: who may WEAR one. Summoned:
+   Coldstone is "Class: ALL" because anyone can wear a coldstone — but only a
+   Magician can summon one, so a WAR/SHD/ROG trio has no way to ever hold it.
+   That mismatch is why Coldstone kept turning up as BiS for parties with no
+   magician in them.
+
+   The fix is a second, explicit list: name -> the classes that can make it.
+   Anything whose name starts with "Summoned:" and has no entry below falls to
+   SUMMON_DEFAULT, which is MAG — magicians conjure the overwhelming majority
+   of them, including every one of the Gallenite / Jedah / Jolum / Naki /
+   Tavee / Rallican named-focus series, the whole Phantom armour line and all
+   the elemental weapons. The exceptions are the self-summons: light sources a
+   caster makes for itself, and the cleric/shaman hammers.
+
+   THIS TABLE IS THE WHOLE FIX. If a pick looks wrong, correct the entry here
+   and nothing else needs to change. Keys are matched exactly first, then by
+   prefix, so one line covers a whole series. */
+const SUMMON_DEFAULT = ["MAG"];
+const SUMMONED_BY = {
+  "Summoned: Coldlight":          ["NEC","ENC"],
+  "Summoned: Globe of Stars":     ["DRU","ENC"],
+  "Summoned: Halo of Light":      ["CLR","DRU","ENC","WIZ"],
+  "Summoned: Firefly Globe":      ["DRU","ENC"],
+  "Summoned: Hammer of Requital": ["CLR","SHM"],
+  "Summoned: Hammer of Striking": ["CLR"],
+  "Summoned: Hammer of Wrath":    ["CLR","SHM"],
+  "Summoned: Modulating Rod":     ["ENC"],
+};
+const SUMMON_NAME = /^summoned\b/i;
+
+/** the classes that can conjure this item, or null if nobody has to */
+function summonedBy(i){
+  const n = i.name || "";
+  if(SUMMONED_BY[n]) return SUMMONED_BY[n];
+  for(const k in SUMMONED_BY) if(n.startsWith(k)) return SUMMONED_BY[k];
+  return SUMMON_NAME.test(n) ? SUMMON_DEFAULT : null;
+}
+/** is there anyone in this trio who could actually produce this? */
+const canSummon = (i, act = active()) => {
+  const by = summonedBy(i);
+  return !by || by.some(c => act.includes(c));
+};
+const summonWhy = i => {
+  const by = summonedBy(i) || [];
+  return `Summoned — needs a ${by.map(c => CLASSES[c]).join(" or ")} in the group to conjure it.`;
+};
 
 /**
  * The heart of it: an item's *effective* class + slot restrictions after
@@ -1384,6 +1447,10 @@ function issues(){
     }
     if(!raceOk(eff.base, state.race))
       out.push({t:"err", ico:"RACE", m:`<b>${nm}</b> is restricted to ${eff.base.races.join("/")} — you are ${RACES[state.race]}.`});
+    if(!canSummon(eff.base, act)){
+      const by = summonedBy(eff.base).map(c => CLASSES[c]).join(" or ");
+      out.push({t:"err", ico:"SUMM", m:`<b>${nm}</b> in ${k} has to be conjured by a ${by}, and you run ${act.join("/")}. The class list says ALL because that's who may <i>wear</i> one — it isn't who can <i>make</i> one.`});
+    }
 
     const s = SLOTS.find(x => x.k === k);
     if(s.a !== "*" && !eff.slots.includes(s.a))
@@ -1495,6 +1562,38 @@ const MELEE = new Set(["WAR","PAL","SHD","RNG","MNK","ROG","BRD","BER","BST"]);
 const DUAL  = new Set(["WAR","RNG","MNK","ROG","BRD","BER","BST"]);
 const isWeapon  = i => !!(i.dmg && i.delay);
 const isTwoHand = i => /^2H/i.test(i.skill || "");
+const isOneHand = i => isWeapon(i) && !isTwoHand(i);
+
+/* ---------------- the hand-shape override ----------------
+   "Shield" means "no weapon in the offhand" rather than "an item the wiki
+   calls a shield", because the wiki barely calls anything a shield — exactly
+   one item in the database carries skill:"SHIELD". The distinction that
+   actually matters mechanically is whether the offhand swings, and !isWeapon
+   captures that precisely: shields, orbs, dolls, tomes all qualify.
+
+   Returns null for auto, which is the signal to leave every pool untouched. */
+const HAND_MODES = [
+  ["auto",    "Auto",        "let the scorer decide"],
+  ["twohand", "Two-hander",  "2H mainhand, offhand empty"],
+  ["shield",  "1H + shield",  "one-hander plus a non-weapon offhand"],
+  ["dual",    "1H + 1H",     "a one-hand weapon in each hand"],
+];
+function handFilter(slotKey, mode){
+  if(!mode || mode === "auto") return null;
+  if(slotKey === "PRIMARY"){
+    if(mode === "twohand") return isTwoHand;
+    if(mode === "dual")    return isOneHand;
+    /* shield: the mainhand only has to not be a two-hander — a caster's orb
+       is a legitimate mainhand and shouldn't be filtered out of a "1H" build */
+    if(mode === "shield")  return i => !isTwoHand(i);
+  }
+  if(slotKey === "SECONDARY"){
+    if(mode === "twohand") return () => false;
+    if(mode === "dual")    return isOneHand;
+    if(mode === "shield")  return i => !isWeapon(i);
+  }
+  return null;
+}
 
 /* Proc is deliberately NOT counted. Every one of these four is graftable onto
    another item through exaltation, but proc is the one that most distorts the
@@ -1799,6 +1898,8 @@ const AUTO_ORDER = ["PRIMARY","SECONDARY","RANGE","AMMO","HEAD","FACE","EAR1","E
 function bisCandidates(slotKey, taken = new Set(), opts = {}){
   const cov = opts.covered;
   const act = active(), w = activeWeights();
+  const hf = opts.ignoreHandMode ? null
+           : handFilter(slotKey, opts.handMode ?? state.handMode);
   const twoHandUp = slotKey === "SECONDARY" && !opts.ignoreTwoHand && (() => {
     const p = state.equipped.PRIMARY;
     return p && byId[p.itemId] && isTwoHand(byId[p.itemId]);
@@ -1810,6 +1911,9 @@ function bisCandidates(slotKey, taken = new Set(), opts = {}){
   if(state.src.size)   pool = pool.filter(i => (i.source||[]).some(s => state.src.has(s)));
   if(state.zones.size) pool = pool.filter(i => zonesOf(i).some(z => state.zones.has(z)));
   pool = pool.filter(i => usableBy(i.classes, act) && raceOk(i, state.race));
+  /* Nothing conjured survives unless somebody here can conjure it */
+  pool = pool.filter(i => canSummon(i, act));
+  if(hf) pool = pool.filter(hf);
   pool = pool.filter(i => {
     const lore = i.tags.includes("LORE") || i.tags.includes("LORE_EQUIPPED");
     return !(lore && taken.has(i.name));
@@ -1831,11 +1935,18 @@ function bisCandidates(slotKey, taken = new Set(), opts = {}){
    just have to beat the best one-hander, it has to beat the one-hander PLUS
    whatever the offhand would have held. Scoring PRIMARY alone never charges
    the two-hander for the slot it eats, which flatters it every time. So both
-   hands are resolved as a pair, before either is committed. */
-function pickHands(taken = new Set(), cov = {}){
+   hands are resolved as a pair, before either is committed.
+
+   A mode other than "auto" doesn't need special-casing here: bisCandidates
+   has already emptied whichever branch the override forbids, so twohand mode
+   finds no one-hander, dual and shield mode find no two-hander, and the
+   comparison below quietly collapses to the single surviving option. Pass a
+   mode explicitly to ask what a DIFFERENT shape would have picked — that's
+   how the drawer prices your override against auto. */
+function pickHands(taken = new Set(), cov = {}, mode = state.handMode){
   const w = activeWeights();
   const lore = i => i.tags.includes("LORE") || i.tags.includes("LORE_EQUIPPED");
-  const prim = bisCandidates("PRIMARY", taken, {covered:cov});
+  const prim = bisCandidates("PRIMARY", taken, {covered:cov, handMode:mode});
   const twoH = prim.find(c => isTwoHand(c.i)) || null;
   const oneH = prim.find(c => !isTwoHand(c.i)) || null;
 
@@ -1848,7 +1959,7 @@ function pickHands(taken = new Set(), cov = {}){
     /* the offhand is priced against a coverage map that already includes the
        mainhand, so a shield doesn't get paid for a focus the sword brought */
     const off = bisCandidates("SECONDARY", t2,
-      {ignoreTwoHand:true, covered:addCoverage({...cov}, oneH.i)})[0] || null;
+      {ignoreTwoHand:true, handMode:mode, covered:addCoverage({...cov}, oneH.i)})[0] || null;
     dw = {primary:oneH, offhand:off, total:oneH.s + (off ? off.s : 0)};
   }
   const th = twoH ? {primary:twoH, offhand:null, total:twoH.s} : null;
@@ -2225,6 +2336,36 @@ function autoBiS(fillOnly){
   render();
 }
 
+/* Re-fit PRIMARY and SECONDARY only, leaving the other twenty slots exactly
+   where they are. Locked hands are honoured — locking is how you tell the
+   planner "I've decided this one", and a mode switch shouldn't overrule that.
+   Coverage and LORE are seeded from everything you're still wearing, so the
+   new mainhand won't buy a focus your chest already carries or a LORE name
+   your finger already claimed. */
+function repickHands(){
+  if(state.locked.has("PRIMARY") || state.locked.has("SECONDARY")) return;
+  const xp = TIER_XP[state.planTier] || 0;
+  const cov = {}, taken = new Set();
+  for(const [k,e] of Object.entries(state.equipped)){
+    if(k === "PRIMARY" || k === "SECONDARY") continue;
+    const it = byId[e.itemId]; if(!it) continue;
+    addCoverage(cov, it);
+    if(it.tags.includes("LORE") || it.tags.includes("LORE_EQUIPPED")) taken.add(it.name);
+  }
+  delete state.equipped.PRIMARY;
+  delete state.equipped.SECONDARY;
+  const hands = pickHands(taken, cov);
+  state.handChoice = hands ? {mode:hands.mode, total:hands.total, rival:hands.rival} : null;
+  if(!hands) return;
+  const put = (k, c) => {
+    if(!c) return;
+    state.equipped[k] = {itemId:c.i.id, xp,
+      exalts:{ornament:null,focus:null,click:null,worn:null,proc:null}};
+  };
+  put("PRIMARY", hands.primary);
+  put("SECONDARY", hands.offhand);
+}
+
 function statLine(i){
   const p = [];
   if(i.dmg) p.push(`${i.dmg}/${i.delay}`);
@@ -2312,6 +2453,17 @@ function renderWeights(){
     <span class="lbl" style="letter-spacing:.04em;text-transform:none">
       ranks items as if levelled this far</span></div>`;
 
+  const hm = state.handMode || "auto";
+  h += `<div class="wmode handbar"><span class="lbl">Hands</span>
+    ${HAND_MODES.map(([k,l,t]) =>
+      `<button class="mbtn ${hm===k?"on":""}" data-hand="${k}" title="${t}">${l}</button>`).join("")}
+    </div>
+    <div class="handnote">${hm === "auto"
+      ? `Both hands are scored as a pair — a two-hander has to beat the best one-hander <i>plus</i> whatever the offhand would have held. Pick a shape above to overrule that.`
+      : `<b>Override:</b> ${esc(HAND_MODES.find(m=>m[0]===hm)[2])}. The scorer now finds the best gear <i>within</i> that shape instead of choosing the shape for you.${
+          hm === "dual" && offhandFactor() === 0
+            ? ` <span style="color:var(--bad)">Nothing in this trio can dual wield, so the offhand weapon's damage counts for zero — you're buying its stats and effects only.</span>` : ""}`}</div>`;
+
   const filters = [];
   if(state.zones.size) filters.push(`<b>${state.zones.size} zone${state.zones.size===1?"":"s"}</b>`);
   if(state.src.size)   filters.push(`<b>${[...state.src].join(", ")}</b>`);
@@ -2325,7 +2477,8 @@ function renderWeights(){
     <button class="btn" id="clearall">Clear loadout</button>
     <div class="scope">Picks run through the same filters as the browser${
       filters.length ? " — currently " + filters.join(" · ") : ", and nothing is filtered right now"
-    }. Class, race and LORE are enforced; a two-hander in Primary skips Secondary.
+    }. Class, race and LORE are enforced; a two-hander in Primary skips Secondary;
+    summoned gear only appears if someone here can summon it.
     ${state.lastAuto?.length ? `<br><span style="color:var(--dim)">Last run filled ${state.lastAuto.length} slot${state.lastAuto.length===1?"":"s"}${
       state.lastExalt?.length ? ` and socketed ${state.lastExalt.length} exaltation${state.lastExalt.length===1?"":"s"}` : ""}.</span>` : ""}
     ${state.lastExalt && !state.lastExalt.length && state.planTier < 1
@@ -2337,6 +2490,16 @@ function renderWeights(){
 
   el.querySelectorAll("[data-wmode]").forEach(b => b.onclick = () => {
     state.wMode = b.dataset.wmode; render();
+  });
+  /* Changing the shape re-fits the hands on the spot rather than waiting for a
+     full Auto-equip. A selector that visibly does nothing until you press
+     another button reads as broken, and re-running the whole loadout would
+     throw away the other twenty slots to answer a two-slot question. */
+  el.querySelectorAll("[data-hand]").forEach(b => b.onclick = () => {
+    if(state.handMode === b.dataset.hand) return;
+    state.handMode = b.dataset.hand;
+    repickHands();
+    render();
   });
   document.getElementById("wreset").onclick = () => {
     state.weights = derivedWeights(); state.wMode = "custom"; render();
@@ -2769,7 +2932,28 @@ function renderDrawer(){
     /* the pair comparison, shown from either hand */
     if(slot === "PRIMARY" || slot === "SECONDARY"){
       const hands = pickHands();
-      if(hands && hands.rival != null){
+      /* Under an override there is no rival to compare against — the losing
+         branch was filtered out before it could be scored. So re-run the pair
+         in auto and show what you gave up, which is the number that actually
+         tells you whether the override was worth it. */
+      if(state.handMode !== "auto"){
+        const auto = pickHands(new Set(), {}, "auto");
+        const mine = hands ? hands.total : 0;
+        const shape = HAND_MODES.find(m => m[0] === state.handMode)[1];
+        h += `<div class="note ${auto && auto.total > mine + 0.5 ? "warn" : ""}">
+          <b>Hands forced to ${esc(shape)}.</b>
+          ${hands ? `Best pair in that shape: ${esc(hands.primary.i.name)}${
+              hands.offhand ? ` + ${esc(hands.offhand.i.name)}` : " with an empty offhand"
+            } — <span class="score">${mine.toFixed(0)}</span>.`
+            : `Nothing in the current filters fits that shape.`}
+          ${auto ? ` Left to itself the scorer would take ${esc(auto.primary.i.name)}${
+              auto.offhand ? ` + ${esc(auto.offhand.i.name)}` : ""
+            } for <span class="score">${auto.total.toFixed(0)}</span>${
+              auto.total > mine + 0.5 ? `, so this override costs you ${(auto.total - mine).toFixed(0)}.`
+              : `, which is no better.`}` : ""}
+          Set Hands back to Auto in the BiS panel to release it.</div>`;
+      }
+      else if(hands && hands.rival != null){
         /* "dual wield" only if the trio can actually dual wield AND the offhand
            is a weapon — a paladin holding a shield, or a wizard holding a second
            wand, is a one-hand-plus-offhand build, not a dual wield one. */
@@ -2852,6 +3036,17 @@ function renderDrawer(){
     let ok = true, why = "";
     if(!usableBy(i.classes, act)){ ok = false; why = `Needs ${showList(i.classes)}`; }
     else if(!raceOk(i, state.race)){ ok = false; why = `${showList(i.races)} only`; }
+    /* Greyed out rather than hidden: "there is no magician here" is a fact
+       about your group, not about the item, and it changes the moment you
+       swap a class. Better to see it struck through than to wonder where it
+       went. The hand-shape override gets the same treatment. */
+    else if(!canSummon(i, act)){ ok = false; why = summonWhy(i); }
+    else if(handFilter(slot, state.handMode) && !handFilter(slot, state.handMode)(i)){
+      ok = false;
+      why = state.handMode === "twohand" && slot === "SECONDARY"
+        ? `Offhand is empty — you've set the hands to Two-hander.`
+        : `Doesn't fit the ${HAND_MODES.find(m => m[0] === state.handMode)[1]} setting.`;
+    }
     else {
       const dupe = Object.entries(state.equipped).find(([k,e]) =>
         byId[e.itemId]?.name === i.name &&
