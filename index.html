@@ -258,6 +258,17 @@ select:hover{border-color:var(--edge2)}
 .row-stat{font-family:var(--mono);font-size:10.5px;color:var(--dim);white-space:nowrap}
 .row-sub{font-size:10.5px;color:var(--faint);line-height:1.4}
 .row-drop{font-size:10px;color:var(--brass-dim)}
+/* Full stat readout. Monospaced and fixed-gap so the eye can run down the
+   column and compare like with like; without that it's just a wall of text. */
+.row-stats{font-family:var(--mono);font-size:10px;line-height:1.6;
+  display:flex;flex-wrap:wrap;gap:0 9px;color:var(--faint);margin:1px 0}
+.row-stats .st{white-space:nowrap}
+.row-stats .st b{color:var(--dim);font-weight:500}
+.row-stats .st.hi b{color:var(--brass)}       /* the stat the list is sorted on */
+.row-stats .st.neg b{color:var(--bad)}
+.row-stats .grp{white-space:nowrap}
+.row-stats .grp .st{margin-right:5px}
+.row-stats .none{color:var(--faint);opacity:.6}
 .row-drop b{color:var(--brass);font-weight:500}
 .pill{font-size:8px;letter-spacing:.09em;text-transform:uppercase;padding:1px 4px;
   border-radius:2px;border:1px solid;white-space:nowrap}
@@ -1436,9 +1447,17 @@ function issues(){
       out.push({t:"err", ico:"CLASS", m:`<b>${nm}</b> in ${k} is unusable — after exaltations it needs ${eff.classes.join("/") || "no class"}; you run ${act.join("/")}.`});
     if(outOfEra(eff.base)){
       const {ix, src} = eraOf(eff.base);
+      /* Not an era problem at all, and saying "it's Kunark Era" about one of
+         these would be actively misleading — several are correctly tagged to
+         an era they'd otherwise pass. The item simply isn't on this server. */
+      if(eff.base.non_legends){
+        out.push({t:"err", ico:"N/A", m:`<b>${nm}</b> doesn't exist in EQ Legends — its wiki page carries the NON-LEGENDS CONTENT banner${
+          ix !== null ? `, even though it's tagged ${eraName(ix)}` : ""}. It's live-EQ content the wiki inherited, not gear you can go and get.`});
+      } else {
       const how = src === "zone-inferred" ? " (no wiki era category — inferred from its drop zone)"
                 : src === "scraper-inferred" ? " (era inferred by the scraper, not tagged on the wiki)" : "";
       out.push({t:"warn", ico:"ERA", m:`<b>${nm}</b> is ${eraName(ix) || "out of era"}${how} — not obtainable at ${state.era}. Plan around it, don't count on it.`});
+      }
     } else {
       const rev = revisedLater(eff.base);
       if(rev) out.push({t:"warn", ico:"ERA", m:`<b>${nm}</b> exists at ${state.era}, but the wiki also tags it ${rev} — the stats shown are likely the later revision, so treat this score as optimistic.`});
@@ -1507,6 +1526,11 @@ const SORTS = [
   ["STR","STR"], ["STA","STA"], ["AGI","AGI"], ["DEX","DEX"],
   ["WIS","WIS"], ["INT","INT"], ["CHA","CHA"],
   ["sumattr",  "Sum of all attributes"],
+  /* Now that resists and haste are on every row, they're worth sorting by
+     too — sortKey's default branch already reads any raw stat key. */
+  ["SV MAGIC","Magic resist"], ["SV FIRE","Fire resist"], ["SV COLD","Cold resist"],
+  ["SV DISEASE","Disease resist"], ["SV POISON","Poison resist"],
+  ["HASTE",    "Haste"],
   ["wt",       "Lightest"],
 ];
 
@@ -2366,37 +2390,88 @@ function repickHands(){
   put("SECONDARY", hands.offhand);
 }
 
-function statLine(i){
-  const p = [];
-  if(i.dmg) p.push(`${i.dmg}/${i.delay}`);
-  if(i.stats?.AC) p.push(`AC${i.stats.AC}`);
-  const hp = i.stats?.HP, mn = i.stats?.MANA;
-  if(hp) p.push(`HP${hp>0?"+":""}${hp}`);
-  if(mn) p.push(`M${mn>0?"+":""}${mn}`);
-  return p.join(" · ");
+/* The wiki writes resists out in full; nobody compares them that way. Short
+   codes keep five of them on one line without wrapping. */
+const RESIST_KEYS = [["SV MAGIC","MR"],["SV FIRE","FR"],["SV COLD","CR"],
+                     ["SV DISEASE","DR"],["SV POISON","PR"]];
+const MISC_KEYS = [["HASTE","Haste","%"],["BACKSTAB","BS",""],["ENDUR","End",""]];
+
+/* Every stat an item carries, at the tier you're planning for.
+ *
+ * Scaled rather than raw on purpose: the score beside it is computed at
+ * state.planTier, so printing base stats next to a tier-7 score would invite
+ * exactly the comparison the numbers don't support. scaledItem is the same
+ * function scoreParts uses, so the two can't drift.
+ *
+ * Zero-value stats are omitted rather than printed as dashes — an item with
+ * four stats should look like four stats, not like sixteen mostly empty
+ * columns. Grouping (attributes together, resists together) is what preserves
+ * scanability once the padding is gone.
+ */
+function fullStats(i){
+  const sc = scaledItem(i, TIER_XP[state.planTier] || 0);
+  const s = sc.stats || {};
+  /* Whatever the list is sorted on gets highlighted, so you can see at a
+     glance which column produced the ordering. Cell keys are real stat keys
+     ("SV MAGIC", "HASTE"), so the non-stat sorts simply never match. */
+  const hi = state.sort;
+  const cell = (label, v, key, suffix = "") => {
+    const cls = "st" + (key && key === hi ? " hi" : "") + (v < 0 ? " neg" : "");
+    return `<span class="${cls}">${label}<b>${v > 0 ? "+" : ""}${v}${suffix}</b></span>`;
+  };
+  const out = [];
+
+  if(sc.dmg) out.push(`<span class="st${state.sort==="ratio"?" hi":""}">${
+    sc.dmg}/${sc.delay}<b> ${(sc.dmg/sc.delay).toFixed(2)}</b></span>`);
+  /* AC reads as a magnitude, not a modifier, so no + sign on it. */
+  if(s.AC) out.push(`<span class="st${hi==="AC"?" hi":""}">AC<b> ${s.AC}</b></span>`);
+  if(s.HP) out.push(cell("HP ", s.HP, "HP"));
+  if(s.MANA) out.push(cell("Mana ", s.MANA, "MANA"));
+
+  const attrs = ATTRS.filter(k => s[k]).map(k => cell(k + " ", s[k], k));
+  if(attrs.length) out.push(`<span class="grp">${attrs.join("")}</span>`);
+
+  const res = RESIST_KEYS.filter(([k]) => s[k]).map(([k, lbl]) => cell(lbl + " ", s[k], k));
+  if(res.length) out.push(`<span class="grp">${res.join("")}</span>`);
+
+  for(const [k, lbl, sfx] of MISC_KEYS)
+    if(s[k]) out.push(cell(lbl + " ", s[k], k, sfx));
+
+  if(sc.wt != null && sc.wt > 0)
+    out.push(`<span class="st${hi==="wt"?" hi":""}">Wt<b> ${sc.wt}</b></span>`);
+
+  if(!out.length) return `<span class="none">no stats</span>`;
+  return out.join("");
 }
+
 const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
 
-/** Lead with whatever the list is sorted on, so the ordering is legible. */
+/** Lead with whatever the list is sorted on, so the ordering is legible.
+ *  The stat summary that used to trail each of these now has its own line
+ *  below the name, in full — repeating a subset here just competed with it. */
 function sortStat(i){
-  const s = i.stats || {}, base = statLine(i);
-  if(state.sort === "fit") return base;
+  const s = i.stats || {};
+  if(state.sort === "fit") return "";
   if(state.sort === "bis"){
     const v = slotScore(i, state.view.slot);
     const cut = state.view.slot === "SECONDARY" && isWeapon(i) && offhandFactor() < 1;
-    return `<b class="score">${v.toFixed(0)}</b>${cut?`<span class="hint"> offhand</span>`:""}${base?" · "+base:""}`;
+    return `<b class="score">${v.toFixed(0)}</b>${cut?`<span class="hint"> offhand</span>`:""}`;
   }
   if(state.sort === "weighted"){
     const v = sortKey(i, active());
-    return `<b style="color:var(--brass)">${v.toFixed(0)}</b>${base?" · "+base:""}`;
+    return `<b style="color:var(--brass)">${v.toFixed(0)}</b>`;
   }
   if(state.sort === "ratio")
-    return i.dmg && i.delay ? `<b style="color:var(--brass)">${(i.dmg/i.delay).toFixed(2)}</b> · ${i.dmg}/${i.delay}` : base;
-  if(state.sort === "wt") return `<b style="color:var(--brass)">${i.wt ?? "—"}</b>${base?" · "+base:""}`;
+    return i.dmg && i.delay ? `<b style="color:var(--brass)">${(i.dmg/i.delay).toFixed(2)}</b>` : "";
+  if(state.sort === "wt") return `<b style="color:var(--brass)">${i.wt ?? "—"}</b>`;
   if(state.sort === "sumattr")
-    return `<b style="color:var(--brass)">${ATTRS.reduce((a,k)=>a+(s[k]||0),0)}</b>${base?" · "+base:""}`;
+    return `<b style="color:var(--brass)">${ATTRS.reduce((a,k)=>a+(s[k]||0),0)}</b>`;
   const v = s[state.sort];
-  return `<b style="color:${v?"var(--brass)":"var(--faint)"}">${state.sort} ${v?(v>0?"+":"")+v:"—"}</b>${base?" · "+base:""}`;
+  /* Short code here as well, so the badge matches the label used in the row
+     below it — "SV FIRE" beside "FR +10" reads as two different stats. */
+  const lbl = (RESIST_KEYS.find(([k]) => k === state.sort)
+            || [null, {MANA:"Mana", HASTE:"Haste"}[state.sort] || state.sort])[1];
+  return `<b style="color:${v?"var(--brass)":"var(--faint)"}">${lbl} ${v?(v>0?"+":"")+v:"—"}</b>`;
 }
 
 function tagPills(i){
@@ -2405,7 +2480,11 @@ function tagPills(i){
   if(i.tags.includes("MAGIC")) h += `<span class="pill magic">Magic</span>`;
   if(i.tags.includes("QUEST")) h += `<span class="pill quest">Quest</span>`;
   if(i.tags.includes("NO_DROP") || i.tags.includes("NO_TRADE")) h += `<span class="pill no">No drop</span>`;
-  if(outOfEra(i)){
+  if(i.non_legends){
+    /* Its own pill rather than an era name. Showing "Kunark" on an item that
+       isn't on the server would read as a date you could plan toward. */
+    h += `<span class="pill ooe" title="The wiki page carries the NON-LEGENDS CONTENT banner — inherited live-EQ content that doesn't exist on this server">Not in Legends</span>`;
+  } else if(outOfEra(i)){
     const {ix, src} = eraOf(i);
     const inferred = src === "zone-inferred" || src === "scraper-inferred";
     h += `<span class="pill ooe" title="${inferred
@@ -3111,6 +3190,7 @@ function renderDrawer(){
       h += `<div class="note"><b>Showing ${CAP} of ${scored.length}.</b> Type above to narrow by name, zone or mob — or use the filters.</div>`;
     h += shown.map(({i, ok, why}) => `<button class="row ${ok?"":"ineligible"}" data-eq="${i.id}" ${ok?"":"disabled"}>
       <div class="row-top"><span class="row-name">${esc(i.name)}</span><span class="row-stat">${sortStat(i)}</span></div>
+      <div class="row-stats">${fullStats(i)}</div>
       <div class="row-sub">${tagPills(i)} ${showList(i.classes)} ${i.races.includes("ALL")?"":"· "+showList(i.races)}
         ${i.effects?.focus?`<span class="pill foc">Focus</span>`:""}
         ${i.effects?.proc?`<span class="pill foc">Proc</span>`:""}
