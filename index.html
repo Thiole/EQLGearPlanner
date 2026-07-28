@@ -1497,7 +1497,8 @@ function syncWeights(){
  * less, because the offhand swings on a dual-wield check rather than every
  * round. Discounting the whole score would quietly tax the stats too.
  */
-function scoreParts(i, slotKey, w = activeWeights(), xp = TIER_XP[state.planTier] || 0){
+function scoreParts(i, slotKey, w = activeWeights(), xp = TIER_XP[state.planTier] || 0,
+                    covered = null){
   const sc = scaledItem(i, xp);
   let stat = 0;
   for(const k of W_STATS) stat += (sc.stats[k] || 0) * (w[k] || 0);
@@ -1518,10 +1519,70 @@ function scoreParts(i, slotKey, w = activeWeights(), xp = TIER_XP[state.planTier
   const SWINGS = new Set(["PRIMARY","SECONDARY"]);
   const ratio = (SWINGS.has(slotKey) && sc.dmg && sc.delay)
     ? (sc.dmg / sc.delay) * (w.RATIO || 0) : 0;
-  const effect = effectCount(i) * (w.EFFECT || 0);
+  const effect = itemEffectValue(i, w, covered);
   return {stat, ratio, effect, total:stat + ratio + effect};
 }
-const scoreItem = (i, slotKey, w, xp) => scoreParts(i, slotKey, w, xp).total;
+const scoreItem = (i, slotKey, w, xp, covered) =>
+  scoreParts(i, slotKey, w, xp, covered).total;
+
+/**
+ * What an item's own effects are worth to you, given what the rest of the
+ * loadout already covers.
+ *
+ * Two things the old flat `effectCount * EFFECT` got wrong:
+ *
+ *   - It valued every effect identically, so a random Ultravision counted the
+ *     same as Improved Damage III for a wizard trio.
+ *   - It gave full credit for an effect you already have. Exaltations don't
+ *     stack, and neither do the native effects — two wrists both carrying
+ *     Reagent Conservation II is one focus and one wasted, but the scorer
+ *     happily paid for both, which is how a loadout ended up holding two
+ *     ranks of the same family.
+ *
+ * `covered` is family -> best rank already held. Credit is the MARGINAL gain
+ * over that, so a duplicate scores 0 and an upgrade scores only the step.
+ * Passing null means "score it standalone", which is what a bare list sort
+ * wants.
+ */
+function itemEffectValue(i, w = activeWeights(), covered = null){
+  let v = 0;
+  for(const t of SCORED_EFFECTS){
+    const e = i.effects?.[t];
+    if(!e) continue;
+    const {family, rank} = parseEffect(e.name);
+    const have = covered ? (covered[family] || 0) : 0;
+    if(rank <= have) continue;
+    v += effectValue(family, rank, t, w) -
+         (have ? effectValue(family, have, t, w) : 0);
+  }
+  return v;
+}
+
+/** family -> best rank carried natively by everything equipped, optionally
+    ignoring one slot (so browsing FINGER2 is priced against FINGER1) */
+function coverageExcluding(skipSlot){
+  const cov = {};
+  for(const [k, e] of Object.entries(state.equipped)){
+    if(k === skipSlot) continue;
+    const it = byId[e.itemId];
+    if(!it) continue;
+    for(const t of ["focus","click","worn","proc"]){
+      if(!it.effects?.[t]) continue;
+      const {family, rank} = parseEffect(it.effects[t].name);
+      cov[family] = Math.max(cov[family] || 0, rank);
+    }
+  }
+  return cov;
+}
+/** fold one item's native effects into a running coverage map */
+function addCoverage(cov, i){
+  for(const t of ["focus","click","worn","proc"]){
+    if(!i.effects?.[t]) continue;
+    const {family, rank} = parseEffect(i.effects[t].name);
+    cov[family] = Math.max(cov[family] || 0, rank);
+  }
+  return cov;
+}
 
 /** How much of an offhand's damage actually lands. Zero for anything that
     can't dual wield at all — a paladin's offhand is a stat stick by definition,
@@ -1531,15 +1592,20 @@ function offhandFactor(w = activeWeights()){
 }
 
 /** An offhand's worth: stats and effects in full, damage discounted. */
-function offhandValue(i, w = activeWeights(), xp){
-  const p = scoreParts(i, "SECONDARY", w, xp);
+function offhandValue(i, w = activeWeights(), xp, covered = null){
+  const p = scoreParts(i, "SECONDARY", w, xp, covered);
   return p.stat + p.effect + p.ratio * offhandFactor(w);
 }
 
 /** The number a slot is actually ranked on — the browser list and auto-equip
     share it, so the list order stays the order auto-equip picks in. */
-function slotScore(i, slotKey, w = activeWeights(), xp){
-  return slotKey === "SECONDARY" ? offhandValue(i, w, xp) : scoreItem(i, slotKey, w, xp);
+function slotScore(i, slotKey, w = activeWeights(), xp, covered){
+  /* Default the coverage to "everything equipped except this slot", so the
+     drawer prices a candidate against what you are already wearing rather
+     than in a vacuum. autoBiS overrides it with its own running map. */
+  const cov = covered !== undefined ? covered : coverageExcluding(slotKey);
+  return slotKey === "SECONDARY" ? offhandValue(i, w, xp, cov)
+                                 : scoreItem(i, slotKey, w, xp, cov);
 }
 
 /* ---------------- auto-equip ----------------
@@ -1554,6 +1620,7 @@ const AUTO_ORDER = ["PRIMARY","SECONDARY","RANGE","AMMO","HEAD","FACE","EAR1","E
 
 /** everything the current filters + rules allow into this slot, best first */
 function bisCandidates(slotKey, taken = new Set(), opts = {}){
+  const cov = opts.covered;
   const act = active(), w = activeWeights();
   const twoHandUp = slotKey === "SECONDARY" && !opts.ignoreTwoHand && (() => {
     const p = state.equipped.PRIMARY;
@@ -1578,7 +1645,7 @@ function bisCandidates(slotKey, taken = new Set(), opts = {}){
   const prefer = (slotKey === "PRIMARY" && act.some(c => MELEE.has(c))) ? isWeapon : null;
 
   return pool
-    .map(i => ({i, s:slotScore(i, slotKey, w), p:prefer ? (prefer(i) ? 1 : 0) : 0}))
+    .map(i => ({i, s:slotScore(i, slotKey, w, undefined, cov), p:prefer ? (prefer(i) ? 1 : 0) : 0}))
     .sort((a,b) => (b.p - a.p) || (b.s - a.s) || a.i.name.localeCompare(b.i.name));
 }
 
@@ -1588,10 +1655,10 @@ function bisCandidates(slotKey, taken = new Set(), opts = {}){
    whatever the offhand would have held. Scoring PRIMARY alone never charges
    the two-hander for the slot it eats, which flatters it every time. So both
    hands are resolved as a pair, before either is committed. */
-function pickHands(taken = new Set()){
+function pickHands(taken = new Set(), cov = {}){
   const w = activeWeights();
   const lore = i => i.tags.includes("LORE") || i.tags.includes("LORE_EQUIPPED");
-  const prim = bisCandidates("PRIMARY", taken);
+  const prim = bisCandidates("PRIMARY", taken, {covered:cov});
   const twoH = prim.find(c => isTwoHand(c.i)) || null;
   const oneH = prim.find(c => !isTwoHand(c.i)) || null;
 
@@ -1601,7 +1668,10 @@ function pickHands(taken = new Set()){
        sword fills both hands */
     const t2 = new Set(taken);
     if(lore(oneH.i)) t2.add(oneH.i.name);
-    const off = bisCandidates("SECONDARY", t2, {ignoreTwoHand:true})[0] || null;
+    /* the offhand is priced against a coverage map that already includes the
+       mainhand, so a shield doesn't get paid for a focus the sword brought */
+    const off = bisCandidates("SECONDARY", t2,
+      {ignoreTwoHand:true, covered:addCoverage({...cov}, oneH.i)})[0] || null;
     dw = {primary:oneH, offhand:off, total:oneH.s + (off ? off.s : 0)};
   }
   const th = twoH ? {primary:twoH, offhand:null, total:twoH.s} : null;
@@ -1885,6 +1955,14 @@ function autoBiS(fillOnly){
   const xp = TIER_XP[state.planTier] || 0;
   const taken = new Set();
   const picked = [];
+  /* Running family coverage. Every pick is priced marginally against it, so
+     the tenth slot won't buy a focus the third slot already brought. Locked
+     and (in fill mode) kept slots seed it, since their effects are real. */
+  const cov = {};
+  for(const [k,e] of Object.entries(state.equipped)){
+    const it = byId[e.itemId];
+    if(it && (state.locked.has(k) || fillOnly)) addCoverage(cov, it);
+  }
 
   // locked slots (and, in fill mode, everything already equipped) claim their LORE first
   for(const [k,e] of Object.entries(state.equipped)){
@@ -1900,7 +1978,7 @@ function autoBiS(fillOnly){
   const handsFree = !state.locked.has("PRIMARY") && !state.locked.has("SECONDARY") &&
                     !(fillOnly && (state.equipped.PRIMARY || state.equipped.SECONDARY));
   if(handsFree){
-    const hands = pickHands(taken);
+    const hands = pickHands(taken, cov);
     state.handChoice = hands ? {mode:hands.mode, total:hands.total, rival:hands.rival} : null;
     if(hands){
       const put = (k, c) => {
@@ -1912,6 +1990,8 @@ function autoBiS(fillOnly){
       };
       put("PRIMARY", hands.primary);
       put("SECONDARY", hands.offhand);
+      if(hands.primary) addCoverage(cov, hands.primary.i);
+      if(hands.offhand) addCoverage(cov, hands.offhand.i);
     }
   }
 
@@ -1919,8 +1999,9 @@ function autoBiS(fillOnly){
     if(state.locked.has(k)) continue;
     if(fillOnly && state.equipped[k]) continue;
     if(handsFree && (k === "PRIMARY" || k === "SECONDARY")) continue;
-    const best = bisCandidates(k, taken)[0];
+    const best = bisCandidates(k, taken, {covered:cov})[0];
     if(!best) continue;
+    addCoverage(cov, best.i);
     state.equipped[k] = {itemId:best.i.id, xp,
       exalts:{ornament:null,focus:null,click:null,worn:null,proc:null}};
     if(best.i.tags.includes("LORE") || best.i.tags.includes("LORE_EQUIPPED"))
@@ -2668,8 +2749,46 @@ function initControls(){
     rd.readAsText(file);
   };
 }
-initControls();
-render();
+
+async function autoLoadHostedData() {
+  try {
+    // 1. Fetch the items data
+    const itemRes = await fetch('./items.json');
+    if (itemRes.ok) {
+      const j = await itemRes.json();
+      const items = Array.isArray(j) ? j : (j.items || []);
+      DATA = {
+        source: j.source || "GitHub Pages Hosted",
+        scraped: j.scraped || new Date().toISOString(),
+        items: items,
+        seed: false
+      };
+      // Rebuild the data index with the new items
+      reindex();
+    } else {
+      console.warn("items.json not found. status:", itemRes.status);
+    }
+
+    // 2. Fetch the character data
+    const charRes = await fetch('./chardata.json');
+    if (charRes.ok) {
+      CHAR = await charRes.json();
+    } else {
+      console.warn("chardata.json not found. Using defaults.");
+    }
+  } catch (err) {
+    console.error("Error processing hosted data:", err);
+  }
+
+  // 3. INITIALIZE controls and RENDER only AFTER all data is perfectly loaded!
+  initControls();
+  render();
+}
+
+// Kick off the auto-load
+autoLoadHostedData();
+
+
 </script>
 </body>
 </html>
