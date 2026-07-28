@@ -1035,6 +1035,40 @@ for(const n of ["Fist of Lightning","Flowing Red Silk Sash","Leech Husk Tunic",
 let ZONE_ERA = {};
 const ZONE_ERA_MIN_AGREEMENT = 0.8;
 
+/* Zone -> era, as a TABLE first and a poll only for what the table misses.
+   The poll alone is what let Kunark zones read as pre-Kunark: Firiona Vie
+   holds 25 Classic-tagged items (Gold Ring, Fine Steel weapons — old items
+   that also drop in Kunark) against 13 Kunark ones, so it votes "Classic";
+   Dreadlands ties 20-20 and resolves to nothing at all, which is worse,
+   because an unresolved zone gates nothing. A zone's expansion is a fact,
+   not a majority opinion. Mirrors ZONE_ERA in scrape.py — keep in step. */
+function canonZone(z){
+  let s = (z||"").toLowerCase().replace(/[`'\u2019]/g,"");
+  s = s.replace(/\(.*?\)/g," ").replace(/[^a-z ]/g," ").replace(/\s+/g," ").trim();
+  if(s.startsWith("the ")) s = s.slice(4);
+  return s.replace(/s\b/g,"");
+}
+const ZONE_TABLE = {};
+for(const z of ["Field of Bone","Warsliks Woods","Swamp of No Hope","Lake of Ill Omen",
+  "Cabilis","Cabilis East","Cabilis West","Kurn's Tower","Firiona Vie","Dreadlands",
+  "Burning Woods","Frontier Mountains","Emerald Jungle","Trakanon's Teeth",
+  "Skyfire Mountains","Timorous Deep","The Overthere","Karnor's Castle","Sebilis",
+  "Old Sebilis","Howling Stones","Chardok","Veeshan's Peak","Charasis",
+  "Crypt of Dalnir","Temple of Droga","Mines of Nurga","The Warrens","Kaesora",
+  "City of Mist","Stonebrunt Mountains","Kerra Island"]) ZONE_TABLE[canonZone(z)] = "Kunark Era";
+for(const z of ["Iceclad Ocean","Eastern Wastes","Western Wastes","Great Divide",
+  "Cobalt Scar","The Wakening Land","Temple of Veeshan","Kael Drakkel","Skyshrine",
+  "Thurgadin","Icewell Keep","Crystal Caverns","Dragon Necropolis","Siren's Grotto",
+  "Tower of Frozen Shadow","Velketor's Labyrinth","Plane of Growth","Plane of Mischief",
+  "Sleeper's Tomb"]) ZONE_TABLE[canonZone(z)] = "Velious Era";
+
+function zoneEraIx(z){
+  const c = canonZone(z);
+  if(ZONE_TABLE[c] !== undefined) return ERA_IX[ZONE_TABLE[c]];
+  if(c.includes("skyshrine")) return ERA_IX["Velious Era"];   // per-class armor quests
+  return ZONE_ERA[z];
+}
+
 function eraTags(i){
   return (i.categories||[]).filter(c => ERA_IX[c] !== undefined);
 }
@@ -1045,6 +1079,7 @@ function buildZoneEra(items){
     if(!t.length) continue;
     const ix = Math.min(...t.map(e => ERA_IX[e]));
     for(const z of (i.zones||[])){
+      if(ZONE_TABLE[canonZone(z)] !== undefined) continue;   // table wins
       tally[z] = tally[z] || {};
       tally[z][ix] = (tally[z][ix] || 0) + 1;
     }
@@ -1064,17 +1099,40 @@ function buildZoneEra(items){
    Velious zone is obtainable from the Classic one. */
 function eraOf(i){
   if(ERA_OVERRIDE[i.name]) return {ix: ERA_IX[ERA_OVERRIDE[i.name]], src:"override"};
+
+  /* The scraper now answers this question directly. `available_from` is the
+     LATEST era across the item's whole acquisition path — its own tag, the
+     forge it needs, every ingredient, the earliest zone it drops in — i.e.
+     the first era you can actually hold one. Everything below answers a
+     different question ("when did this item first exist") and only ran
+     because the scraper used to be unable to answer this one. Prefer it. */
+  if(ERA_IX[i.available_from] !== undefined)
+    return {ix: ERA_IX[i.available_from], src: i.gated_by ? "gated" : "scraper"};
+
   const t = eraTags(i);
   if(t.length){
     const ixs = t.map(e => ERA_IX[e]);
-    return {ix: Math.min(...ixs), src: ixs.length > 1 ? "tagged-revised" : "tagged"};
+    var own = {ix: Math.min(...ixs), src: ixs.length > 1 ? "tagged-revised" : "tagged"};
+  } else if(ERA_IX[i.era] !== undefined){
+    var own = {ix: ERA_IX[i.era], src:"tagged"};
+  } else if(typeof i.era_inferred === "string" && ERA_IX[i.era_inferred] !== undefined){
+    var own = {ix: ERA_IX[i.era_inferred], src:"scraper-inferred"};
+  } else {
+    var own = null;
   }
-  if(ERA_IX[i.era] !== undefined) return {ix: ERA_IX[i.era], src:"tagged"};
-  if(typeof i.era_inferred === "string" && ERA_IX[i.era_inferred] !== undefined)
-    return {ix: ERA_IX[i.era_inferred], src:"scraper-inferred"};
-  const zi = (i.zones||[]).map(z => ZONE_ERA[z]).filter(x => x !== undefined);
-  if(zi.length) return {ix: Math.min(...zi), src:"zone-inferred"};
-  return {ix: null, src:"unknown"};
+
+  /* Zone gating, for data scraped before available_from existed. A tag says
+     when the item was introduced; the zone says whether you can walk to it.
+     Falchion of the Koada'Vie is tagged Classic Era and drops only in Firiona
+     Vie, so "min across everything" called it available at Classic. Take the
+     LATER of the item's own era and its earliest reachable zone. */
+  const zi = (i.zones||[]).map(zoneEraIx).filter(x => x !== undefined);
+  if(zi.length){
+    const zmin = Math.min(...zi);
+    if(!own) return {ix: zmin, src:"zone-gated"};
+    return zmin > own.ix ? {ix: zmin, src:"zone-gated"} : own;
+  }
+  return own || {ix: null, src:"unknown"};
 }
 const eraName = ix => (ix === null || ix === undefined) ? null : ERA_ORDER[ix];
 
