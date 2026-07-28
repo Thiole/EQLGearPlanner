@@ -132,6 +132,29 @@ header{
   border-left:1px solid var(--edge);padding-left:14px}
 .hdr-right{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 
+/* Era selector — pinned to the true centre of the header, independent of how
+   wide the brand or the class controls happen to be. header is position:
+   sticky, which is a positioned ancestor, so absolute anchors to it. */
+.erapick{
+  position:absolute; left:50%; transform:translateX(-50%);
+  display:flex; flex-direction:column; align-items:center; gap:3px;
+  pointer-events:none;                 /* the gap between label and select */
+}
+.erapick > *{pointer-events:auto}
+.erapick label{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
+.erapick select{
+  min-width:186px;text-align:center;text-align-last:center;
+  border-color:var(--brass-dim);color:var(--brass);font-weight:500;
+}
+.erapick select:hover{border-color:var(--brass)}
+.erapick .now{font-size:9px;letter-spacing:.1em;color:var(--faint)}
+.erapick .now.off{color:var(--warn)}
+/* Below ~1180px the absolute centre starts colliding with the class selects,
+   so drop it back into normal flow on its own line. */
+@media (max-width:1180px){
+  .erapick{position:static;transform:none;order:9;width:100%}
+}
+
 .ctl{display:flex;flex-direction:column;gap:3px}
 .ctl label{font-size:9px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint)}
 select,input[type=search]{
@@ -316,6 +339,13 @@ a{color:var(--brass-dim)}
 <header>
   <div class="brand">EQ<span>L</span> Gear Planner</div>
   <div class="tagline">Exaltation &amp; loadout modelling</div>
+
+  <div class="erapick">
+    <label for="era">Planning for</label>
+    <select id="era"></select>
+    <div class="now" id="eranow"></div>
+  </div>
+
   <div class="hdr-right">
     <div class="ctl"><label for="c1">Class 1</label><select id="c1"></select></div>
     <div class="ctl"><label for="c2">Class 2</label><select id="c2"></select></div>
@@ -946,29 +976,169 @@ const SEED = {source:"eqlwiki.com (hand-verified seed)", seed:true, items:[
    and "SECONDAY" is a genuine typo on the wiki stranding 3 items. */
 const SLOT_ALIAS = {FINGERS:"FINGER", SECONDAY:"SECONDARY"};
 
-/* EQ Legends launches with Antonica/Faydwer/Odus; Kunark is the first
-   expansion and Velious is nowhere near. eqlwiki marks these pages with an
-   explicit "Out of Era" banner — use it when present, otherwise infer from the
-   era category so the filter still works on a pre-reparse dataset. */
-const OUT_OF_ERA_ERAS = new Set(["Velious Era","Kunark Era","Chardok Revamp Era",
-  "Epic Quests Era","FearHateRevamp Era","Nov 2000 Era"]);
+/* ---------------- era timeline ----------------
 
-/* Items can carry more than one era category (Fanged Skull Stiletto is both
-   Classic and Velious), and the old three-era list missed Epic Quests /
-   FearHateRevamp / Nov 2000 outright. Both sets below were derived by testing
-   candidate rules against the 6,764 hand-flagged rows in the reparsed dataset:
-   "any era category is out-of-era" reproduces 6,756 of them, and these eight
-   are the whole remainder — Kunark/Velious-era items that ARE in EQL. */
-const IN_ERA_ANYWAY = new Set(["Fist of Lightning","Flowing Red Silk Sash",
-  "Leech Husk Tunic","Mantle of Fire","Mucilaginous Girdle","Sash of the Dragonborn",
-  "Scaled Prowler Belt","Scaled Wolf Hide Belt"]);
+   The old model was a boolean: a fixed set of "out of era" category names.
+   That can't answer "what did my options look like at Kunark launch", it
+   mis-flags items that exist in Classic and were merely BUFFED later (their
+   page carries both categories), and it needed a hardcoded exception list.
 
+   This is the ordered list instead. Availability becomes: earliest era an
+   item exists in <= the era you've selected. ERA_ORDER is chronological by
+   the live-EQ dates the wiki's categories correspond to. */
+const ERA_ORDER = [
+  "Classic Era",        // Mar 1999 — launch
+  "Fear Era",           // Plane of Fear
+  "Hate Era",           // Plane of Hate
+  "Paineel Era",        // Paineel / Erudin schism
+  "Temple Era",         // Temple of Solusek Ro  (NOT Temple of Veeshan)
+  "Sky Era",            // Plane of Sky — last pre-Kunark content
+  "Kunark Era",         // Apr 2000
+  "Epic Quests Era",    // Sep 2000
+  "Nov 2000 Era",
+  "FearHateRevamp Era", // Fear/Hate revamped, Nov 2000
+  "Velious Era",        // Dec 2000
+  "Chardok Revamp Era", // post-Velious
+];
+const ERA_IX = Object.fromEntries(ERA_ORDER.map((e, n) => [e, n]));
+
+/* Where EQ Legends actually is. Everything at or below this index is live.
+   The old OUT_OF_ERA_ERAS set drew its line in exactly this place — Sky in,
+   Kunark out — so defaulting here preserves the previous behaviour. */
+const CURRENT_ERA = "Sky Era";
+
+/* Kunark/Velious-tagged items that EQL has made available early. Verified by
+   hand against the live server; the wiki has no field for this. Mapped to
+   CURRENT_ERA rather than Classic because we know only that they're in NOW,
+   not when they were introduced — so they correctly disappear if you rewind
+   the dropdown to a genuinely earlier era. */
+const ERA_OVERRIDE = {};
+for(const n of ["Fist of Lightning","Flowing Red Silk Sash","Leech Husk Tunic",
+    "Mantle of Fire","Mucilaginous Girdle","Sash of the Dragonborn",
+    "Scaled Prowler Belt","Scaled Wolf Hide Belt"]) ERA_OVERRIDE[n] = CURRENT_ERA;
+
+/* ~30% of wiki item pages carry no Era category at all (Shield of the
+   Protector, a Temple of Veeshan drop, is the canonical example — the wiki
+   simply never tagged it, so its page shows no Out of Era banner either).
+   Rather than hardcode a zone->era table, derive one from the items that ARE
+   tagged: Temple of Veeshan is 220 Velious to 1 Chardok Revamp, which is not
+   a close call. Zones that don't reach consensus are left unresolved. */
+let ZONE_ERA = {};
+const ZONE_ERA_MIN_AGREEMENT = 0.8;
+
+function eraTags(i){
+  return (i.categories||[]).filter(c => ERA_IX[c] !== undefined);
+}
+function buildZoneEra(items){
+  const tally = {};
+  for(const i of items){
+    const t = eraTags(i);
+    if(!t.length) continue;
+    const ix = Math.min(...t.map(e => ERA_IX[e]));
+    for(const z of (i.zones||[])){
+      tally[z] = tally[z] || {};
+      tally[z][ix] = (tally[z][ix] || 0) + 1;
+    }
+  }
+  ZONE_ERA = {};
+  for(const [z, counts] of Object.entries(tally)){
+    const total = Object.values(counts).reduce((a,b) => a+b, 0);
+    const [ix, n] = Object.entries(counts).sort((a,b) => b[1]-a[1])[0];
+    if(n / total >= ZONE_ERA_MIN_AGREEMENT) ZONE_ERA[z] = +ix;
+  }
+}
+
+/* -> {ix, src} where ix is the EARLIEST era the item exists in, or null if
+   nothing in the data can place it. Minimum, not maximum: an item tagged
+   both Classic and Velious was in the game at Classic and got revised later,
+   so it is available now. Same for zones — a drop in both a Classic and a
+   Velious zone is obtainable from the Classic one. */
+function eraOf(i){
+  if(ERA_OVERRIDE[i.name]) return {ix: ERA_IX[ERA_OVERRIDE[i.name]], src:"override"};
+  const t = eraTags(i);
+  if(t.length){
+    const ixs = t.map(e => ERA_IX[e]);
+    return {ix: Math.min(...ixs), src: ixs.length > 1 ? "tagged-revised" : "tagged"};
+  }
+  if(ERA_IX[i.era] !== undefined) return {ix: ERA_IX[i.era], src:"tagged"};
+  if(typeof i.era_inferred === "string" && ERA_IX[i.era_inferred] !== undefined)
+    return {ix: ERA_IX[i.era_inferred], src:"scraper-inferred"};
+  const zi = (i.zones||[]).map(z => ZONE_ERA[z]).filter(x => x !== undefined);
+  if(zi.length) return {ix: Math.min(...zi), src:"zone-inferred"};
+  return {ix: null, src:"unknown"};
+}
+const eraName = ix => (ix === null || ix === undefined) ? null : ERA_ORDER[ix];
+
+function selectedEraIx(){ return ERA_IX[state.era]; }
+
+/* Unresolvable items stay VISIBLE. Most of them are quest/vendor/craft items
+   with no drop zone to infer from; hiding 1,276 rows on the strength of a
+   missing wiki category would be a worse failure than showing a few too many. */
 function outOfEra(i){
-  if(typeof i.out_of_era === "boolean") return i.out_of_era;   // authoritative, if present
-  if(IN_ERA_ANYWAY.has(i.name)) return false;
-  const eras = (i.categories||[]).filter(c => c.endsWith("Era"));
-  if(eras.length) return eras.some(e => OUT_OF_ERA_ERAS.has(e));
-  return OUT_OF_ERA_ERAS.has(i.era);
+  if(typeof i.out_of_era === "boolean") return i.out_of_era;  // authoritative, if present
+  const {ix} = eraOf(i);
+  if(ix === null) return false;
+  return ix > selectedEraIx();
+}
+/* True when the item existed by the selected era but the wiki also tags it to
+   a later one — the stats on its page are probably the post-buff revision. */
+function revisedLater(i){
+  const t = eraTags(i).map(e => ERA_IX[e]);
+  if(t.length < 2) return null;
+  const later = t.filter(x => x > selectedEraIx()).sort((a,b) => a-b);
+  return (Math.min(...t) <= selectedEraIx() && later.length) ? ERA_ORDER[later[0]] : null;
+}
+
+/* ---------------- item versions ----------------
+
+   The wiki keeps most revisions on one page, but a handful are split into
+   separate pages: "Red Headband" (Classic) and "Red Headband (Kunark)" are
+   the same item at two different stat lines. Naive filtering shows both.
+
+   Group by base name, then only treat a group as versions of one item if its
+   members disagree about era — otherwise "Rough Elm Recurve Bow (Hemp/Linen/
+   Silk)" and the deity/material armour variants, which are genuinely
+   different items that happen to share a stem, get wrongly collapsed. */
+const VERSION_STALE = /^(pre-?nerf|old|duplicate|original)$/i;
+let VERSIONS = {};   // baseName -> [item, ...]
+
+function versionBase(i){
+  const m = /^(.*?)\s*\(([^()]+)\)$/.exec(i.name);
+  return m ? m[1] : i.name;
+}
+function buildVersions(items){
+  const groups = {};
+  for(const i of items) (groups[versionBase(i)] = groups[versionBase(i)] || []).push(i);
+  VERSIONS = {};
+  for(const [base, members] of Object.entries(groups)){
+    if(members.length < 2) continue;
+    const ixs = members.map(m => eraOf(m).ix);
+    const eraSplit = new Set(ixs.filter(x => x !== null)).size > 1;
+    const staleSplit = members.some(m => VERSION_STALE.test(/\(([^()]+)\)$/.exec(m.name)?.[1] || ""));
+    if(eraSplit || staleSplit) VERSIONS[base] = members;
+  }
+}
+/* The one version of a group you can actually have at the selected era: the
+   newest member introduced at or before it. Ties break against Pre-Nerf/Old. */
+function currentVersion(base){
+  const members = VERSIONS[base];
+  if(!members) return null;
+  const sel = selectedEraIx();
+  const live = members.filter(m => { const {ix} = eraOf(m); return ix === null || ix <= sel; });
+  const pool = live.length ? live : members;
+  return pool.slice().sort((a,b) => {
+    const sa = VERSION_STALE.test(/\(([^()]+)\)$/.exec(a.name)?.[1] || "") ? 1 : 0;
+    const sb = VERSION_STALE.test(/\(([^()]+)\)$/.exec(b.name)?.[1] || "") ? 1 : 0;
+    if(sa !== sb) return sa - sb;
+    return (eraOf(b).ix ?? -1) - (eraOf(a).ix ?? -1);
+  })[0];
+}
+/* A superseded version — hide it when the era filter is on. */
+function supersededVersion(i){
+  const base = versionBase(i);
+  if(!VERSIONS[base]) return false;
+  const cur = currentVersion(base);
+  return cur && cur.id !== i.id;
 }
 function normalizeItems(items){
   for(const i of items){
@@ -988,6 +1158,10 @@ function normalizeItems(items){
     }
     if(!i.zones) i.zones = [...new Set((i.drops||[]).map(d => d.zone))];
   }
+  /* Order matters: versions are grouped by era, and era falls back to zone
+     inference, so the zone table has to exist first. */
+  buildZoneEra(items);
+  buildVersions(items);
 }
 
 /* ---------------- state ---------------- */
@@ -996,7 +1170,10 @@ let byId = {};
 const state = {
   classes:["WAR","SHD","ROG"], race:"OGR",
   equipped:{},              // slotKey -> {itemId, xp, exalts:{type:srcItemId}}
-  view:{mode:"slot", slot:null, exalt:null}, q:"", inEra:true,
+  view:{mode:"slot", slot:null, exalt:null}, q:"",
+  /* era = the point on the timeline you're planning for; inEra = whether to
+     hide what isn't available yet at that point. Two separate questions. */
+  era:CURRENT_ERA, inEra:true,
   sort:"bis",               // bis | fit | weighted | AC | HP | MANA | STR... | ratio
   /* Both filters are multi-select and deliberately GLOBAL, not per-slot: pick
      your four zones once and every slot you click stays inside them. Empty set
@@ -1007,7 +1184,12 @@ const state = {
   /* --- BiS scoring --- */
   wMode:"auto",             // auto = derived from classes | custom = the fields below
   weights:null,             // filled by syncWeights() on first render
-  planTier:0,               // score everything as if it were sitting at this tier
+  /* +4 is the useful default rather than +0: it's the tier at which the last
+     exaltation socket (proc, req 4) unlocks, so a first run out of the box
+     ranks gear the way you'll actually wear it AND has every socket open for
+     autoExaltAll to fill. At +0 the auto-equip looked like it was ignoring
+     exaltations entirely, because nothing was unlocked yet. */
+  planTier:4,               // score everything as if it were sitting at this tier
   locked:new Set()          // slot keys auto-equip must not touch
 };
 
@@ -1104,8 +1286,17 @@ function issues(){
     const nm = eff.base.name;
     if(!usableBy(eff.classes, act))
       out.push({t:"err", ico:"CLASS", m:`<b>${nm}</b> in ${k} is unusable — after exaltations it needs ${eff.classes.join("/") || "no class"}; you run ${act.join("/")}.`});
-    if(outOfEra(eff.base))
-      out.push({t:"warn", ico:"ERA", m:`<b>${nm}</b> is ${eff.base.era||"out of era"} — not obtainable in EQ Legends yet. Plan around it, don't count on it.`});
+    if(outOfEra(eff.base)){
+      const {ix, src} = eraOf(eff.base);
+      const how = src === "zone-inferred" ? " (no wiki era category — inferred from its drop zone)"
+                : src === "scraper-inferred" ? " (era inferred by the scraper, not tagged on the wiki)" : "";
+      out.push({t:"warn", ico:"ERA", m:`<b>${nm}</b> is ${eraName(ix) || "out of era"}${how} — not obtainable at ${state.era}. Plan around it, don't count on it.`});
+    } else {
+      const rev = revisedLater(eff.base);
+      if(rev) out.push({t:"warn", ico:"ERA", m:`<b>${nm}</b> exists at ${state.era}, but the wiki also tags it ${rev} — the stats shown are likely the later revision, so treat this score as optimistic.`});
+      if(supersededVersion(eff.base))
+        out.push({t:"warn", ico:"ERA", m:`<b>${nm}</b> is an older version of ${esc(currentVersion(versionBase(eff.base)).name)} — that one is what drops at ${state.era}.`});
+    }
     if(!raceOk(eff.base, state.race))
       out.push({t:"err", ico:"RACE", m:`<b>${nm}</b> is restricted to ${eff.base.races.join("/")} — you are ${RACES[state.race]}.`});
 
@@ -1209,7 +1400,7 @@ const W_STATS = ["AC","HP","MANA","STR","STA","AGI","DEX","WIS","INT","CHA"];
 const W_SPECIAL = [
   ["RATIO",   "per 1.0 dmg/delay"],
   ["OFFHAND", "share of offhand dmg that lands"],
-  ["EFFECT",  "each focus/proc/click/worn"],
+  ["EFFECT",  "each focus/click/worn (proc excluded — graft it)"],
   ["WT",      "penalty per 1 weight"],
 ];
 const W_KEYS = [...W_STATS, ...W_SPECIAL.map(([k]) => k)];
@@ -1218,7 +1409,29 @@ const MELEE = new Set(["WAR","PAL","SHD","RNG","MNK","ROG","BRD","BER","BST"]);
 const DUAL  = new Set(["WAR","RNG","MNK","ROG","BRD","BER","BST"]);
 const isWeapon  = i => !!(i.dmg && i.delay);
 const isTwoHand = i => /^2H/i.test(i.skill || "");
-const effectCount = i => ["focus","proc","click","worn"].filter(t => i.effects?.[t]).length;
+
+/* Proc is deliberately NOT counted. Every one of these four is graftable onto
+   another item through exaltation, but proc is the one that most distorts the
+   ranking — it drags mediocre stat sticks above good gear on the strength of
+   an effect you can simply move. Score items on their stats, then transplant
+   the effects onto the winners (see autoExalt). */
+const SCORED_EFFECTS = ["focus","click","worn"];
+const effectCount = i => SCORED_EFFECTS.filter(t => i.effects?.[t]).length;
+
+/* ---- tuning constants for the auto vector ----
+   AC and MANA are per your spec. The two HP numbers are the judgement call:
+   the point is that a melee's HP comes mostly from STA (already weighted
+   1.2-1.5), so flat HP on an item is worth materially less to them than the
+   1.0 the old table gave it. Adjust here, or flip to Custom in the UI. */
+const W_AC_MELEE = 4, W_AC_OTHER = 3;
+const W_HP_MELEE = 0.6, W_HP_OTHER = 0.8;
+const W_MANA_BASE = 0.05, W_MANA_PER_CASTER = 0.05;   // 0.05 solo-melee -> 0.20 triple caster
+const W_RATIO_MELEE = 200;    // dmg/delay — the dominant term on a weapon
+const W_EFFECT = 4;
+
+/* Anything that spends mana. Hybrids count: a paladin's mana is real, it's
+   just not why you pick the item. */
+const usesMana = c => (CHAR.stat_weights?.[c]?.MANA || 0) > 0;
 
 /** the class-derived starting vector */
 function derivedWeights(){
@@ -1228,13 +1441,35 @@ function derivedWeights(){
     const t = CHAR.stat_weights?.[c] || {};
     for(const [k,v] of Object.entries(t)) if(k in w) w[k] = Math.max(w[k], v);
   });
+
+  /* AC, HP and MANA are overridden rather than taken from stat_weights.
+     Max-across-the-trio is right for a stat only one class cares about (a
+     trio with a cleric wants WIS), but defensive stats are wanted by everyone
+     in the group at once, so the trio's MIX is what matters — hence the mean.
+     A pure melee trio averages to 4 AC, a pure caster trio to 3, and a mixed
+     trio lands in between. */
+  const mean = f => act.length ? act.reduce((s,c) => s + f(c), 0) / act.length : 0;
+  if(act.length){
+    w.AC = mean(c => MELEE.has(c) ? W_AC_MELEE : W_AC_OTHER);
+    w.HP = mean(c => MELEE.has(c) ? W_HP_MELEE : W_HP_OTHER);
+    /* Flat MANA is nearly worthless next to the casting stat, which returns
+       far more mana per point AND carries everything else it carries — so
+       INT/WIS keep their ~2.0 while MANA drops two orders of magnitude. It
+       still scales with how much of the trio actually casts. */
+    w.MANA = Math.min(0.2, W_MANA_BASE + W_MANA_PER_CASTER * act.filter(usesMana).length);
+  }
+
   /* No melee in the trio means nothing is meleeing, so a weapon's ratio is
      worth nothing and both hands are pure stat sticks — which is why a caster
      almost never wants a two-hander: it costs a whole slot of stats and returns
-     damage the build will not use. */
-  w.RATIO   = act.some(c => MELEE.has(c)) ? 100 : 0;
+     damage the build will not use.
+
+     For a trio that DOES swing, ratio is the single most important number on
+     a weapon and the vector has to say so: at 200, one point of dmg/delay
+     outranks roughly 50 AC, which is the ordering you want on a mainhand. */
+  w.RATIO   = act.some(c => MELEE.has(c)) ? W_RATIO_MELEE : 0;
   w.OFFHAND = 0.6;
-  w.EFFECT  = 3;
+  w.EFFECT  = W_EFFECT;
   w.WT      = 0;
   return w;
 }
@@ -1267,9 +1502,22 @@ function scoreParts(i, slotKey, w = activeWeights(), xp = TIER_XP[state.planTier
   let stat = 0;
   for(const k of W_STATS) stat += (sc.stats[k] || 0) * (w[k] || 0);
   if(w.WT && sc.wt != null) stat -= sc.wt * w.WT;
-  const weaponSlot = slotKey === "PRIMARY" || slotKey === "SECONDARY" ||
-                     slotKey === "RANGE"   || slotKey === "ANY1" || slotKey === "ANY2";
-  const ratio = (weaponSlot && sc.dmg && sc.delay) ? (sc.dmg / sc.delay) * (w.RATIO || 0) : 0;
+  /* Ratio is credit for damage you actually deal, so it only applies where the
+     item gets swung: the two hands. Everything else holds a weapon as a stat
+     stick and its dmg/delay is decoration.
+
+     The ANY slots were the live bug — they take anything equippable, so a
+     fast dagger was collecting 200-a-point of ratio for sitting in a flex
+     slot it never attacks from, which floated weapons over the stat gear
+     those slots exist to hold.
+
+     RANGE is the judgement call: a bow IS a weapon, but w.RATIO is derived
+     from melee presence in the trio and is a melee-swing number, not an
+     archery one. Crediting it here would price a bow's ratio as if it were
+     mainhand DPS. Add "RANGE" to the set if you want bows ranked on ratio. */
+  const SWINGS = new Set(["PRIMARY","SECONDARY"]);
+  const ratio = (SWINGS.has(slotKey) && sc.dmg && sc.delay)
+    ? (sc.dmg / sc.delay) * (w.RATIO || 0) : 0;
   const effect = effectCount(i) * (w.EFFECT || 0);
   return {stat, ratio, effect, total:stat + ratio + effect};
 }
@@ -1314,7 +1562,7 @@ function bisCandidates(slotKey, taken = new Set(), opts = {}){
   if(twoHandUp) return [];
 
   let pool = DATA.items.filter(i => fitsSlot(i, slotKey));
-  if(state.inEra)      pool = pool.filter(i => !outOfEra(i));
+  if(state.inEra)      pool = pool.filter(i => !outOfEra(i) && !supersededVersion(i));
   if(state.src.size)   pool = pool.filter(i => (i.source||[]).some(s => state.src.has(s)));
   if(state.zones.size) pool = pool.filter(i => zonesOf(i).some(z => state.zones.has(z)));
   pool = pool.filter(i => usableBy(i.classes, act) && raceOk(i, state.race));
@@ -1365,6 +1613,273 @@ function pickHands(taken = new Set()){
   return null;
 }
 
+/* ---------------- exaltations, sourced automatically ----------------
+   Effects are portable: level a second copy of the source item to its unlock
+   tier and its focus/click/worn/proc becomes a removable exaltation you can
+   socket into whatever you actually want to wear. So the play is to pick the
+   best stat items, then go and fetch the effects.
+
+   Two constraints make this a puzzle rather than a fill:
+
+   1. EXALTATIONS DO NOT STACK. Only the highest rank in a family counts, so
+      Mana Preservation I, II and III together are worth exactly Mana
+      Preservation III — the other two sockets are dead. The job is therefore
+      to cover as many DIFFERENT families as possible, at the best rank each.
+   2. Socketing intersects the source's class and slot lists into the target's,
+      which can narrow the target out of its own slot or out of your trio. So
+      a source used early can make a later socket illegal.
+
+   Together those mean slot-at-a-time-first-legal-wins is badly wrong. What's
+   below is global-best-first greedy over every (socket, source) pair, scored
+   by marginal value, with a repair pass afterwards. */
+
+/* ---- effect families and ranks ----
+   Two naming schemes are in the data and they overlap in meaning, which
+   matters enormously: if Gallenite's Destruction and Improved Damage are the
+   same family, running both wastes a socket.
+
+     "Mana Preservation II"          -> family + roman rank
+     "Gallenite's Major Destruction" -> owner + magnitude + family
+     "Naki's Charm of Pernicity"     -> owner + "Charm of" + family
+
+   The alias map below is inferred from the names themselves — destruction is
+   damage, conservation is mana, diuturnity is duration, pernicity is speed.
+   If any of these turn out to be separate focus lines in EQL, correcting the
+   map here is the whole fix. Abatement is deliberately NOT aliased: nothing
+   in the name pins it to a known line, so it stands as its own family. */
+const ROMAN = {I:1, II:2, III:3, IV:4, V:5};
+const MAGNITUDE = {minor:1, lesser:2, greater:4, major:5, superior:6};
+const FAMILY_ALIAS = {
+  "Destruction":  "Improved Damage",
+  "Conservation": "Mana Preservation",
+  "Diuturnity":   "Extended Enhancement",
+  "Pernicity":    "Spell Haste",
+};
+function parseEffect(name){
+  let s = String(name || "").trim(), rank = null;
+  const owned = /^[^']+'s\s+(.*)$/.exec(s);
+  if(owned){
+    let rest = owned[1].replace(/^charm of\s+/i, "");
+    const mm = /^(minor|lesser|greater|major|superior)\s+(.*)$/i.exec(rest);
+    if(mm){ rank = MAGNITUDE[mm[1].toLowerCase()]; rest = mm[2]; }
+    else rank = 3;                       // the unadorned middle of the series
+    s = rest;
+  } else {
+    const m = /^(.*?)\s+(I{1,3}|IV|V|\d+)$/.exec(s);
+    if(m){ rank = ROMAN[m[2]] ?? parseInt(m[2], 10); s = m[1]; }
+  }
+  return {family: FAMILY_ALIAS[s] || s, rank: rank || 1};
+}
+
+/* ---- what a focus family is worth, per class ----
+   HEURISTIC, exactly like stat_weights — opinion, not game data, and the
+   first thing to retune if the picks look wrong. Unlisted families fall to
+   FOCUS_DEFAULT so a focus line nobody has classified still beats an empty
+   socket. Bard resonance lines carry an arabic number that is a LEVEL, not a
+   rank, which is why rank multipliers are capped at 3 below. */
+const FOCUS_DEFAULT = 0.4;
+const FOCUS_WEIGHTS = {
+  "Improved Damage":       {WIZ:2.0, MAG:1.7, NEC:1.4, ENC:1.2, DRU:1.1, SHM:0.8, CLR:0.6, PAL:0.4, SHD:0.5, RNG:0.4, BST:0.5},
+  "Burning Affliction":    {NEC:2.0, SHM:1.4, DRU:1.2, ENC:1.0, WIZ:0.5, BST:0.6, SHD:0.6},
+  "Mana Preservation":     {WIZ:1.6, MAG:1.5, NEC:1.5, ENC:1.5, CLR:1.6, DRU:1.5, SHM:1.5, PAL:0.7, RNG:0.7, SHD:0.7, BST:0.9, BRD:0.5},
+  "Spell Haste":           {WIZ:1.5, MAG:1.2, NEC:1.2, ENC:1.4, CLR:1.7, DRU:1.3, SHM:1.3, PAL:0.8, RNG:0.7, SHD:0.7, BST:0.8},
+  "Improved Healing":      {CLR:2.0, DRU:1.5, SHM:1.4, PAL:1.0, RNG:0.8, BST:0.9},
+  "Affliction Efficiency": {NEC:1.6, SHM:1.1, DRU:1.0, ENC:0.9, SHD:0.5},
+  "Affliction Haste":      {NEC:1.3, SHM:0.9, DRU:0.8, ENC:0.8},
+  "Extended Enhancement":  {ENC:1.6, CLR:1.3, DRU:1.3, SHM:1.3, MAG:0.7, BRD:0.6, PAL:0.5, RNG:0.5, BST:0.8},
+  "Enhancement Haste":     {ENC:1.1, CLR:1.0, DRU:0.9, SHM:0.9, BST:0.6},
+  "Reagent Conservation":  {NEC:1.2, MAG:1.2, ENC:1.0, WIZ:0.9, CLR:0.7},
+  "Summoning Efficiency":  {MAG:1.5, NEC:1.0},
+  "Summoning Haste":       {MAG:1.2, NEC:0.9},
+  "Reanimation Efficiency":{NEC:1.5},
+  "Reanimation Haste":     {NEC:1.2},
+  "Extended Range":        {WIZ:1.2, MAG:0.9, ENC:0.9, NEC:0.7, DRU:0.7},
+  "Minion of Air":         {MAG:1.3}, "Minion of Earth": {MAG:1.3},
+  "Minion of Fire":        {MAG:1.3}, "Minion of Water": {MAG:1.3},
+  "Minion of Hate":        {NEC:1.3},
+  "Servant of Air":        {MAG:1.1}, "Servant of Earth": {MAG:1.1},
+  "Servant of Fire":       {MAG:1.1}, "Servant of Water": {MAG:1.1},
+  "String Resonance":      {BRD:1.4}, "Brass Resonance": {BRD:1.4},
+  "Wind Resonance":        {BRD:1.4}, "Percussion Resonance": {BRD:1.4},
+};
+/* click/worn/proc carry no rank or family taxonomy worth inventing — they get
+   a flat weight, and the no-stack rule alone stops the duplicate spam. */
+const NONFOCUS_WEIGHT = 0.8;
+
+function familyWeight(family, type){
+  if(type !== "focus") return NONFOCUS_WEIGHT;
+  const t = FOCUS_WEIGHTS[family];
+  if(!t) return FOCUS_DEFAULT;
+  return Math.max(...active().map(c => t[c] || 0), 0) || FOCUS_DEFAULT * 0.5;
+}
+/* Rank 1 -> 1.0x, 2 -> 1.4x, 3+ -> 1.8x. Capped because bard resonance ranks
+   are levels in the teens and would otherwise dwarf everything. */
+const rankMult = r => 0.6 + 0.4 * Math.min(r, 3);
+function effectValue(family, rank, type, w){
+  return (w.EFFECT || 0) * familyWeight(family, type) * rankMult(rank);
+}
+
+/* A summoned item's effect can't be extracted — you can't level a second copy
+   of something a spell conjures, so there is no exaltation to pull out of it.
+   This costs real sources: 24 of the 142 focus sources are summoned, and it
+   removes the entire Gallenite / Jedah / Jolum / Naki / Tavee / Rallican
+   named-focus series (all mage-summoned) from the pool.
+
+   Tested by TEMPORARY tag rather than by name, since that catches the
+   Shadowed weapons and Animated Shield too — but the name is checked as well,
+   because "Summoned: Staff of Tracing" is missing the tag on the wiki and
+   each test covers the other's gap. */
+const isSummoned = i => (i.tags || []).includes("TEMPORARY") ||
+                        /^summoned\b/i.test(i.name || "");
+
+function exaltPool(){
+  let pool = DATA.items.filter(i => !isSummoned(i));
+  if(state.inEra)      pool = pool.filter(i => !outOfEra(i) && !supersededVersion(i));
+  if(state.src.size)   pool = pool.filter(i => (i.source||[]).some(s => state.src.has(s)));
+  if(state.zones.size) pool = pool.filter(i => zonesOf(i).some(z => state.zones.has(z)));
+  return pool;
+}
+/** one pass over the pool per socket type — 142 focus / 612 click / 102 worn /
+    367 proc sources, so the inner legality loop stays cheap */
+function effectSources(pool){
+  const by = {};
+  for(const ex of EXALTS){
+    if(!ex.src) continue;
+    by[ex.k] = pool.filter(i => i.effects?.[ex.src]).map(i => {
+      const nm = i.effects[ex.src].name, p = parseEffect(nm);
+      return {i, nm, family:p.family, rank:p.rank};
+    });
+  }
+  return by;
+}
+
+/** legal sources for one socket, against the target AS IT STANDS RIGHT NOW */
+function legalSources(slotKey, entry, ex, sources){
+  const sdef = SLOTS.find(s => s.k === slotKey), eff = effective(entry);
+  if(!sdef || !eff) return [];
+  const act = active();
+  return sources.filter(s => {
+    const c = cx(eff.classes, s.i.classes), sl = sx(eff.slots, s.i.slots);
+    if(!c.length || !sl || !sl.length) return false;
+    if(sdef.a !== "*" && !sl.includes(sdef.a)) return false;
+    return usableBy(c, act);
+  });
+}
+
+/** highest rank already covered per family, counting effects the equipped
+    items carry natively — socketing Improved Damage I is worthless if your
+    mainhand already came with Improved Damage II */
+function claimedFamilies(){
+  const best = {};
+  const bump = nm => { const {family, rank} = parseEffect(nm);
+                       best[family] = Math.max(best[family] || 0, rank); };
+  for(const e of Object.values(state.equipped)){
+    const it = byId[e.itemId];
+    if(it) for(const t of ["focus","click","worn","proc"])
+      if(it.effects?.[t]) bump(it.effects[t].name);
+    for(const ex of EXALTS){
+      if(!ex.src) continue;
+      const s = e.exalts?.[ex.k] && byId[e.exalts[ex.k]];
+      if(s?.effects?.[ex.src]) bump(s.effects[ex.src].name);
+    }
+  }
+  return best;
+}
+
+/** every unlocked, empty socket across every unlocked slot */
+function openSockets(){
+  const out = [];
+  for(const [k, e] of Object.entries(state.equipped)){
+    if(state.locked.has(k)) continue;
+    const tier = tierOf(e.xp || 0);
+    for(const ex of EXALTS){
+      if(!ex.src || tier < ex.req || e.exalts?.[ex.k]) continue;
+      out.push({slot:k, entry:e, ex});
+    }
+  }
+  return out;
+}
+
+/**
+ * Fill sockets to maximise total covered value.
+ *
+ * Global-best-first greedy: every round, score every legal (socket, source)
+ * pair by MARGINAL value — what it adds over what that family already
+ * contributes — and commit the single best one. Marginal, not absolute, is
+ * what makes the no-stack rule fall out naturally: once Mana Preservation III
+ * is placed, every other Mana Preservation pair scores 0 and drops out, and a
+ * lower rank of an already-covered family never gets picked at all.
+ *
+ * Committing narrows the target, so the legal list is recomputed for the other
+ * sockets on that same slot. Only that slot — nothing else moved.
+ *
+ * Greedy is not optimal here (the narrowing makes it a genuine assignment
+ * problem), so a repair pass follows: any family that went unplaced gets a
+ * chance to displace a cheaper commitment.
+ */
+function autoExaltAll(){
+  const w = activeWeights(), sources = effectSources(exaltPool());
+  const claimed = claimedFamilies();
+  const sockets = openSockets();
+  const legal = new Map();                      // socket -> legal sources, cached
+  const refresh = s => legal.set(s, legalSources(s.slot, s.entry, s.ex, sources[s.ex.k] || []));
+  sockets.forEach(refresh);
+
+  const marginal = c => {
+    const have = claimed[c.family] || 0;
+    if(c.rank <= have) return 0;                // doesn't stack — adds nothing
+    return effectValue(c.family, c.rank, c.type, w) -
+           (have ? effectValue(c.family, have, c.type, w) : 0);
+  };
+
+  const log = [], placed = [];
+  const open = new Set(sockets);
+  while(open.size){
+    let best = null;
+    for(const s of open)
+      for(const c of legal.get(s) || []){
+        const v = marginal({...c, type:s.ex.src});
+        if(v > 0 && (!best || v > best.v)) best = {s, c, v};
+      }
+    if(!best) break;                            // nothing left that adds value
+    best.s.entry.exalts[best.s.ex.k] = best.c.i.id;
+    claimed[best.c.family] = best.c.rank;
+    open.delete(best.s);
+    placed.push(best);
+    log.push(`${best.s.slot} ${best.s.ex.n}: ${best.c.nm} (from ${best.c.i.name})`);
+    /* narrowing only touches the item that just took a socket */
+    for(const s of open) if(s.slot === best.s.slot) refresh(s);
+  }
+
+  /* --- repair pass ---
+     A family can go unplaced because the only socket that could take it was
+     spent on something cheaper earlier. Try each such family against every
+     commitment worth less than it. */
+  let improved = true, guard = 0;
+  while(improved && guard++ < 3){
+    improved = false;
+    for(const s of sockets){
+      for(const c of legal.get(s) || []){
+        if((claimed[c.family] || 0) >= c.rank) continue;
+        const gain = marginal({...c, type:s.ex.src});
+        const cur = placed.find(p => p.s === s);
+        if(!cur || gain <= cur.v) continue;
+        claimed[cur.c.family] = 0;              // give the displaced family back
+        s.entry.exalts[s.ex.k] = c.i.id;
+        claimed[c.family] = c.rank;
+        cur.c = c; cur.v = gain;
+        log.push(`${s.slot} ${s.ex.n}: swapped to ${c.nm} (from ${c.i.name})`);
+        improved = true;
+        for(const o of sockets) if(o.slot === s.slot && o !== s) refresh(o);
+        break;
+      }
+    }
+  }
+
+  state.exaltSkipped = sockets.length - placed.length;
+  return log;
+}
+
 /** @param fillOnly leave slots that already hold something alone */
 function autoBiS(fillOnly){
   const xp = TIER_XP[state.planTier] || 0;
@@ -1413,6 +1928,9 @@ function autoBiS(fillOnly){
     picked.push(`${k} ${best.i.name} (${best.s.toFixed(0)})`);
   }
   state.lastAuto = picked;
+  /* Effects last: sockets can only be judged against the item that ended up
+     in the slot, so this has to run after every slot is settled. */
+  state.lastExalt = autoExaltAll();
   render();
 }
 
@@ -1455,7 +1973,17 @@ function tagPills(i){
   if(i.tags.includes("MAGIC")) h += `<span class="pill magic">Magic</span>`;
   if(i.tags.includes("QUEST")) h += `<span class="pill quest">Quest</span>`;
   if(i.tags.includes("NO_DROP") || i.tags.includes("NO_TRADE")) h += `<span class="pill no">No drop</span>`;
-  if(outOfEra(i)) h += `<span class="pill ooe">Out of era</span>`;
+  if(outOfEra(i)){
+    const {ix, src} = eraOf(i);
+    const inferred = src === "zone-inferred" || src === "scraper-inferred";
+    h += `<span class="pill ooe" title="${inferred
+      ? "No era category on the wiki — inferred from drop zone" : "Wiki era category"}">${
+      eraName(ix) ? esc(eraName(ix).replace(/ Era$/, "")) : "Out of era"}${inferred ? "?" : ""}</span>`;
+  } else {
+    const rev = revisedLater(i);
+    if(rev) h += `<span class="pill ooe" title="Wiki also tags this ${rev} — the stats shown may be the later revision">Revised ${esc(rev.replace(/ Era$/, ""))}</span>`;
+    if(supersededVersion(i)) h += `<span class="pill ooe">Superseded version</span>`;
+  }
   if(i.charges) h += `<span class="pill chg">${i.charges} charges</span>`;
   if((i.source||[]).includes("craft")) h += `<span class="pill craft">Crafted</span>`;
   if((i.source||[]).includes("vendor")) h += `<span class="pill vend">Vendor</span>`;
@@ -1496,17 +2024,22 @@ function renderWeights(){
   const filters = [];
   if(state.zones.size) filters.push(`<b>${state.zones.size} zone${state.zones.size===1?"":"s"}</b>`);
   if(state.src.size)   filters.push(`<b>${[...state.src].join(", ")}</b>`);
-  if(state.inEra)      filters.push(`in-era only`);
+  if(state.inEra)      filters.push(`available at <b>${esc(state.era)}</b>`);
   if(state.locked.size)filters.push(`<b>${state.locked.size} locked slot${state.locked.size===1?"":"s"}</b> untouched`);
 
   h += `<div class="wact">
     <button class="btn btn-brass" id="autobis">Auto-equip BiS</button>
     <button class="btn" id="fillbis">Fill empty slots only</button>
+    <button class="btn" id="fillex" title="Socket the best legal focus/click/worn/proc into everything you're wearing">Fill exaltations</button>
     <button class="btn" id="clearall">Clear loadout</button>
     <div class="scope">Picks run through the same filters as the browser${
       filters.length ? " — currently " + filters.join(" · ") : ", and nothing is filtered right now"
     }. Class, race and LORE are enforced; a two-hander in Primary skips Secondary.
-    ${state.lastAuto?.length ? `<br><span style="color:var(--dim)">Last run filled ${state.lastAuto.length} slot${state.lastAuto.length===1?"":"s"}.</span>` : ""}</div>
+    ${state.lastAuto?.length ? `<br><span style="color:var(--dim)">Last run filled ${state.lastAuto.length} slot${state.lastAuto.length===1?"":"s"}${
+      state.lastExalt?.length ? ` and socketed ${state.lastExalt.length} exaltation${state.lastExalt.length===1?"":"s"}` : ""}.</span>` : ""}
+    ${state.lastExalt && !state.lastExalt.length && state.planTier < 1
+      ? `<br><span style="color:var(--faint)">No exaltations socketed — the first socket unlocks at +1, so raise "Score at tier".</span>` : ""}
+    ${state.exaltSkipped ? `<br><span style="color:var(--faint)">${state.exaltSkipped} socket${state.exaltSkipped===1?"":"s"} left empty — every legal source there duplicates a family you already cover, and exaltations don't stack.</span>` : ""}</div>
   </div>`;
 
   el.innerHTML = h;
@@ -1536,6 +2069,7 @@ function renderWeights(){
 
   document.getElementById("autobis").onclick = () => autoBiS(false);
   document.getElementById("fillbis").onclick = () => autoBiS(true);
+  document.getElementById("fillex").onclick = () => { state.lastExalt = autoExaltAll(); render(); };
   document.getElementById("clearall").onclick = () => {
     for(const k of Object.keys(state.equipped)) if(!state.locked.has(k)) delete state.equipped[k];
     state.lastAuto = null; render();
@@ -1695,81 +2229,14 @@ function renderLog(){
 }
 
 /* ---------------- render: drawer ---------------- */
-/* ---------------- zone facet (shared) ----------------
-   state.zones is global, not per-slot, so the control renders in every drawer
-   view: pick your route once — with nothing selected if you like — and every
-   slot you click afterwards stays inside it. */
-function countZones(pool){
-  const c = {};
-  pool.forEach(i => zonesOf(i).forEach(z => c[z] = (c[z]||0)+1));
-  return c;
-}
-/* Counts for the views that aren't scoped to one slot: the whole database,
-   minus out-of-era gear if that toggle is on. */
-function allZoneCounts(){
-  return countZones(state.inEra ? DATA.items.filter(i => !outOfEra(i)) : DATA.items);
-}
-function zoneFacetHTML(zoneCounts, emptyMsg = "No zone data loaded."){
-  const zAll = Object.entries(zoneCounts)
-    .sort((a,b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  let h = `<div class="fbar">
-    <button class="fbtn ${state.zones.size?"on":""}" id="zbtn">
-      <span>${state.zones.size ? `Zones · ${state.zones.size} selected` : "Zones · all"}</span>
-      <span class="cnt">${state.zoneOpen?"▴":"▾"} ${zAll.length}</span></button>
-    ${state.zones.size?`<button class="clr" id="zclr">clear</button>`:""}</div>`;
-
-  if(state.zoneOpen){
-    const q = state.zoneQ.toLowerCase();
-    let list = zAll.filter(([z]) => !q || z.toLowerCase().includes(q));
-    const CAPZ = 60, over = Math.max(0, list.length - CAPZ);
-    list = list.slice(0, CAPZ);
-    /* A selected zone must stay visible even when the current view has nothing
-       in it, or you can't untick it without clearing the whole filter. */
-    for(const z of state.zones)
-      if(!list.some(([n]) => n === z)) list.push([z, zoneCounts[z] || 0]);
-    h += `<div class="zpanel">
-      <input type="search" id="zq" placeholder="Find a zone…" value="${esc(state.zoneQ)}">
-      <div class="zlist">${list.map(([z,n]) =>
-        `<button class="zchip ${state.zones.has(z)?"on":""} ${n?"":"dim"}" data-zone="${esc(z)}">
-          ${esc(z)} <span class="n">${n}</span></button>`).join("")}
-        ${over?`<div class="zmore">+${over} more — type above to narrow.</div>`:""}
-        ${zAll.length?"":`<div class="zmore">${emptyMsg}</div>`}</div></div>`;
-  }
-  return h;
-}
-function wireZoneFacet(d){
-  const zb = document.getElementById("zbtn");
-  if(zb) zb.onclick = () => { state.zoneOpen = !state.zoneOpen; renderDrawer(); };
-  const zc = document.getElementById("zclr");
-  if(zc) zc.onclick = () => { state.zones.clear(); render(); };
-  d.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => {
-    const z = b.dataset.zone;
-    state.zones.has(z) ? state.zones.delete(z) : state.zones.add(z);
-    render();                       // totals summary tracks the filter too
-  });
-  const zq = document.getElementById("zq");
-  if(zq) zq.oninput = () => { state.zoneQ = zq.value; renderDrawer();
-    const n = document.getElementById("zq"); n.focus(); n.setSelectionRange(n.value.length,n.value.length); };
-}
-/* The "you are filtered" reminder, shown wherever the facet is. */
-function zoneFilterNote(){
-  return state.zones.size
-    ? `<div class="note"><b>Filtered to ${state.zones.size} zone${state.zones.size===1?"":"s"}:</b>
-       ${[...state.zones].map(esc).join(" · ")}.<br>This sticks as you click through slots — build the whole set out of one route, then clear it.</div>`
-    : "";
-}
-
 function renderDrawer(){
   const d = document.getElementById("drawer");
   const {slot, exalt} = state.view;
 
   if(!slot){
     document.getElementById("dtitle").textContent = "Browser";
-    document.getElementById("dsub").textContent =
-      state.zones.size ? `${state.zones.size} zone${state.zones.size===1?"":"s"} filtered` : "";
-    d.innerHTML = zoneFacetHTML(allZoneCounts()) + zoneFilterNote() +
-      `<div class="empty"><b>Pick a slot</b>Click any slot on the left to see the gear that fits it, filtered to your classes and race. Set your zones above first and every slot stays inside that route.</div>`;
-    wireZoneFacet(d);
+    document.getElementById("dsub").textContent = "";
+    d.innerHTML = `<div class="empty"><b>Pick a slot</b>Click any slot on the left to see the gear that fits it, filtered to your classes and race.</div>`;
     return;
   }
   const sdef = SLOTS.find(s => s.k === slot);
@@ -1792,9 +2259,10 @@ function renderDrawer(){
     const scored = cands.map(i => {
       const c = cx(eff.classes, i.classes), s = sx(eff.slots, i.slots);
       const slotOk = sdef.a === "*" ? true : (s && s.includes(sdef.a));
-      const ok = c.length > 0 && s && s.length > 0 && slotOk && usableBy(c, active());
+      const ok = !isSummoned(i) && c.length > 0 && s && s.length > 0 && slotOk && usableBy(c, active());
       let why = "";
-      if(!c.length) why = `No shared class with ${eff.base.name}.`;
+      if(isSummoned(i)) why = `Summoned — you can't level a second copy, so there's no exaltation to extract.`;
+      else if(!c.length) why = `No shared class with ${eff.base.name}.`;
       else if(!s || !s.length) why = `Slot restriction (${i.slots.join("/")}) can't meet ${eff.slots.join("/")}.`;
       else if(!slotOk) why = `Would force ${eff.base.name} to ${s.join("/")} — not ${sdef.n}.`;
       else if(!usableBy(c, active())) why = `Result usable only by ${c.join("/")}.`;
@@ -1854,10 +2322,7 @@ function renderDrawer(){
     ["proc","click","worn"].forEach(t => { if(it.effects?.[t])
       tip += `<span class="t-eff">Effect: ${esc(it.effects[t].name)} (${esc(it.effects[t].detail||t)})</span>\n`; });
 
-    /* Facet stays reachable while inspecting a piece — you often want to widen
-       the route before hopping to the next slot. */
-    let h = zoneFacetHTML(allZoneCounts()) + zoneFilterNote();
-    h += `<div class="tip"><div class="tip-name">${esc(it.name)}</div><pre>${tip.trim()}</pre></div>`;
+    let h = `<div class="tip"><div class="tip-name">${esc(it.name)}</div><pre>${tip.trim()}</pre></div>`;
 
     const tier = eff.sc.tier;
     h += `<div class="rail"><div class="rail-h"><h3>Tier</h3>
@@ -1945,7 +2410,6 @@ function renderDrawer(){
     h += `<div class="data-note">Source: <a href="${it.url}" target="_blank" rel="noopener">${it.url.replace("https://","")}</a></div>`;
 
     d.innerHTML = h;
-    wireZoneFacet(d);
     const setXp = v => {
       entry.xp = Math.max(0, Math.min(MAX_XP, v));
       const t = tierOf(entry.xp);
@@ -1983,8 +2447,8 @@ function renderDrawer(){
   document.getElementById("dtitle").textContent = sdef.n + (sdef.a === "*" ? " (flex)" : "");
   const act = active();
   let pool = DATA.items.filter(i => fitsSlot(i, slot));
-  const hiddenEra = state.inEra ? pool.filter(outOfEra).length : 0;
-  if(state.inEra) pool = pool.filter(i => !outOfEra(i));
+  const hiddenEra = state.inEra ? pool.filter(i => outOfEra(i) || supersededVersion(i)).length : 0;
+  if(state.inEra) pool = pool.filter(i => !outOfEra(i) && !supersededVersion(i));
   if(state.q) pool = pool.filter(i =>
     (i.name + " " + (i.drops||[]).map(x=>x.zone+" "+x.mobs.join(" ")).join(" ")).toLowerCase()
       .includes(state.q.toLowerCase()));
@@ -2024,16 +2488,42 @@ function renderDrawer(){
   let h = `<div class="search"><input type="search" id="q" placeholder="Filter by name, zone or mob…" value="${esc(state.q)}"></div>`;
 
   /* ---- zone facet ---- */
-  h += zoneFacetHTML(zoneCounts, "No zone data for this slot.");
+  const zAll = Object.entries(zoneCounts)
+    .sort((a,b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  h += `<div class="fbar">
+    <button class="fbtn ${state.zones.size?"on":""}" id="zbtn">
+      <span>${state.zones.size ? `Zones · ${state.zones.size} selected` : "Zones · all"}</span>
+      <span class="cnt">${state.zoneOpen?"▴":"▾"} ${zAll.length}</span></button>
+    ${state.zones.size?`<button class="clr" id="zclr">clear</button>`:""}</div>`;
+
+  if(state.zoneOpen){
+    const q = state.zoneQ.toLowerCase();
+    let list = zAll.filter(([z]) => !q || z.toLowerCase().includes(q));
+    const CAPZ = 60, over = Math.max(0, list.length - CAPZ);
+    list = list.slice(0, CAPZ);
+    /* A selected zone must stay visible even when this slot has nothing in it,
+       or you can't untick it without clearing the whole filter. */
+    for(const z of state.zones)
+      if(!list.some(([n]) => n === z)) list.push([z, zoneCounts[z] || 0]);
+    h += `<div class="zpanel">
+      <input type="search" id="zq" placeholder="Find a zone…" value="${esc(state.zoneQ)}">
+      <div class="zlist">${list.map(([z,n]) =>
+        `<button class="zchip ${state.zones.has(z)?"on":""} ${n?"":"dim"}" data-zone="${esc(z)}">
+          ${esc(z)} <span class="n">${n}</span></button>`).join("")}
+        ${over?`<div class="zmore">+${over} more — type above to narrow.</div>`:""}
+        ${zAll.length?"":`<div class="zmore">No zone data for this slot.</div>`}</div></div>`;
+  }
 
   h += `<div class="sortbar"><label for="sort">Sort</label><select id="sort">${SORTS.map(([k,l]) =>
       `<option value="${k}" ${state.sort===k?"selected":""}>${l}</option>`).join("")}</select></div>
     <div class="chips">${SRC.map(([k,l]) =>
       `<button class="chip ${state.src.has(k)?"on":""}" data-srcf="${k}" title="${srcCounts[k]||0} here">${l}${srcCounts[k]?` · ${srcCounts[k]}`:""}</button>`).join("")}
-      <button class="chip era ${state.inEra?"on":""}" id="erachip" title="Hide Kunark/Velious gear that isn't in EQ Legends yet">
-        ${state.inEra ? `In era only${hiddenEra?` · ${hiddenEra} hidden`:""}` : "Showing out-of-era"}</button></div>`;
+      <button class="chip era ${state.inEra?"on":""}" id="erachip" title="Hide gear that isn't obtainable at ${esc(state.era)}, plus superseded versions of items">
+        ${state.inEra ? `${esc(state.era.replace(/ Era$/,""))} only${hiddenEra?` · ${hiddenEra} hidden`:""}` : "Showing all eras"}</button></div>`;
 
-  h += zoneFilterNote();
+  if(state.zones.size)
+    h += `<div class="note"><b>Filtered to ${state.zones.size} zone${state.zones.size===1?"":"s"}:</b>
+      ${[...state.zones].map(esc).join(" · ")}.<br>This sticks as you click through slots — build the whole set out of one route, then clear it.</div>`;
   if(sdef.a === "*")
     h += `<div class="note"><b>Any slot.</b> Takes any equippable item at full stats — a second shield for AC, a spare breastplate, a boot dagger for backstab. Class and race rules still apply.</div>`;
 
@@ -2062,7 +2552,18 @@ function renderDrawer(){
   const so = document.getElementById("sort");
   if(so) so.onchange = () => { state.sort = so.value; renderDrawer(); };
 
-  wireZoneFacet(d);
+  const zb = document.getElementById("zbtn");
+  if(zb) zb.onclick = () => { state.zoneOpen = !state.zoneOpen; renderDrawer(); };
+  const zc = document.getElementById("zclr");
+  if(zc) zc.onclick = () => { state.zones.clear(); render(); };
+  d.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => {
+    const z = b.dataset.zone;
+    state.zones.has(z) ? state.zones.delete(z) : state.zones.add(z);
+    render();                       // totals summary tracks the filter too
+  });
+  const zq = document.getElementById("zq");
+  if(zq) zq.oninput = () => { state.zoneQ = zq.value; renderDrawer();
+    const n = document.getElementById("zq"); n.focus(); n.setSelectionRange(n.value.length,n.value.length); };
   d.querySelectorAll("[data-srcf]").forEach(b => b.onclick = () => {
     const k = b.dataset.srcf;
     state.src.has(k) ? state.src.delete(k) : state.src.add(k);
@@ -2090,7 +2591,17 @@ function renderDataNote(){
 }
 
 /* ---------------- boot ---------------- */
-function render(){ renderWeights(); renderDoll(); renderTotals(); renderZoneSum(); renderChar(); renderLog(); renderDrawer(); renderDataNote();
+function renderEraNote(){
+  const el = document.getElementById("eranow");
+  if(!el) return;
+  const sel = selectedEraIx(), now = ERA_IX[CURRENT_ERA];
+  el.className = "now" + (sel === now ? "" : " off");
+  el.textContent = sel === now ? "current EQ Legends content"
+    : sel < now ? "rewound — hides gear that is live now"
+                : "unreleased — shows gear EQL doesn't have yet";
+}
+
+function render(){ renderEraNote(); renderWeights(); renderDoll(); renderTotals(); renderZoneSum(); renderChar(); renderLog(); renderDrawer(); renderDataNote();
   document.getElementById("dollsub").textContent =
     `${Object.keys(state.equipped).length}/${SLOTS.length} slots · ${active().join(" / ")}`;
 }
@@ -2107,6 +2618,13 @@ function initControls(){
   r.innerHTML = Object.entries(RACES).map(([k,v]) => `<option value="${k}">${v}</option>`).join("");
   r.value = state.race;
   r.onchange = () => { state.race = r.value; render(); };
+
+  const era = document.getElementById("era");
+  era.innerHTML = ERA_ORDER.map(e =>
+    `<option value="${e}">${e.replace(/ Era$/, "")}${e === CURRENT_ERA ? " — live" : ""}</option>`).join("");
+  era.value = state.era;
+  era.onchange = () => { state.era = era.value; render(); };
+  renderEraNote();
 
   const cf = document.getElementById("charfile");
   document.getElementById("loadchar").onclick = () => cf.click();
@@ -2150,47 +2668,8 @@ function initControls(){
     rd.readAsText(file);
   };
 }
-
-
-
-
-async function autoLoadHostedData() {
-  try {
-    // 1. Fetch the items data
-    const itemRes = await fetch('./items.json');
-    if (itemRes.ok) {
-      const j = await itemRes.json();
-      const items = Array.isArray(j) ? j : (j.items || []);
-      DATA = {
-        source: j.source || "GitHub Pages Hosted", 
-        scraped: j.scraped || new Date().toISOString(), 
-        items: items, 
-        seed: false
-      };
-      // Rebuild the data index with the new items
-      reindex(); 
-    } else {
-      console.warn("items.json not found. status:", itemRes.status);
-    }
-
-    // 2. Fetch the character data
-    const charRes = await fetch('./chardata.json');
-    if (charRes.ok) {
-      CHAR = await charRes.json();
-    } else {
-      console.warn("chardata.json not found. Using defaults.");
-    }
-  } catch (err) {
-    console.error("Error processing hosted data:", err);
-  }
-  
-  // 3. INITIALIZE controls and RENDER only AFTER all data is perfectly loaded!
-  initControls();
-  render();
-}
-
-// Kick off the auto-load
-autoLoadHostedData();
+initControls();
+render();
 </script>
 </body>
 </html>
