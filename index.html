@@ -1946,18 +1946,51 @@ const FOCUS_WEIGHTS = {
   "Minion of Hate":        {NEC:1.3},
   "Servant of Air":        {MAG:1.1}, "Servant of Earth": {MAG:1.1},
   "Servant of Fire":       {MAG:1.1}, "Servant of Water": {MAG:1.1},
-  "String Resonance":      {BRD:1.4}, "Brass Resonance": {BRD:1.4},
-  "Wind Resonance":        {BRD:1.4}, "Percussion Resonance": {BRD:1.4},
+  /* Instrument modifiers — BRD only, and deliberately listed with no entry
+     for any other class so familyWeight returns a hard 0 for them. Singing is
+     included even though no item in the current data carries it: an unlisted
+     family falls to FOCUS_DEFAULT, which would hand a no-bard trio free score
+     the moment one appears. */
+  "String Resonance":      {BRD:1.4}, "Brass Resonance":      {BRD:1.4},
+  "Wind Resonance":        {BRD:1.4}, "Percussion Resonance":  {BRD:1.4},
+  "Singing Resonance":     {BRD:1.6},
 };
 /* click/worn/proc carry no rank or family taxonomy worth inventing — they get
    a flat weight, and the no-stack rule alone stops the duplicate spam. */
 const NONFOCUS_WEIGHT = 0.8;
 
+/* Instrument modifiers are the bard's version of a focus effect and nobody
+   else's. Allakhazam's class FAQ puts it bluntly: focus effects do not work
+   with bard songs, and the bard's focus items are the ones carrying instrument
+   modifications. The converse is what matters here — a String Resonance is
+   inert on a warrior, a cleric, or anyone else who does not sing.
+
+   Note this is NOT a socketing restriction. The exaltation rule is "same slot
+   and at least one shared class", and every instrument in the data is
+   PRIMARY/SECONDARY and Class: ALL, so the game will happily let you socket
+   Percussion Resonance 14 into a two-hander. It just does nothing there. So
+   the fix is a zero weight, not an eligibility filter. */
+const INSTRUMENT_FAMILIES = new Set([
+  "String Resonance", "Brass Resonance", "Wind Resonance",
+  "Percussion Resonance", "Singing Resonance",
+]);
+
 function familyWeight(family, type){
   if(type !== "focus") return NONFOCUS_WEIGHT;
   const t = FOCUS_WEIGHTS[family];
+  /* Unlisted family: nobody has classified it, so give it the benefit of the
+     doubt — an unknown focus still beats an empty socket. */
   if(!t) return FOCUS_DEFAULT;
-  return Math.max(...active().map(c => t[c] || 0), 0) || FOCUS_DEFAULT * 0.5;
+  const best = Math.max(...active().map(c => t[c] || 0), 0);
+  /* Listed family that none of the active classes want is a REAL zero, and
+     the old code lost it: `Math.max(...) || FOCUS_DEFAULT * 0.5` treated 0 as
+     falsy and fell through to the unknown-family floor. A no-bard trio was
+     therefore paying 0.2 weight for every instrument resonance it saw — with
+     EFFECT 4 and the rank multiplier, about 1.4 points of score for an effect
+     that is literally inert. The distinction the fallback is meant to draw is
+     "we don't know" versus "we know, and it's worth nothing"; only the first
+     deserves a floor. */
+  return best;
 }
 /* Rank 1 -> 1.0x, 2 -> 1.4x, 3+ -> 1.8x. Capped because bard resonance ranks
    are levels in the teens and would otherwise dwarf everything. */
