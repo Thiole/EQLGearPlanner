@@ -331,6 +331,7 @@ select:hover{border-color:var(--edge2)}
 .data-note b{color:var(--dim)}
 .data-note code{font-family:var(--mono);color:var(--brass-dim);font-size:10px}
 a{color:var(--brass-dim)}
+[hidden]{display:none!important}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
@@ -368,6 +369,14 @@ a{color:var(--brass-dim)}
       <div class="wbody" id="wpanel"></div>
     </section>
 
+    <section class="card" style="margin-bottom:18px">
+      <div class="card-h">
+        <h2>Zones</h2>
+        <div class="sub" id="zonesub"></div>
+      </div>
+      <div class="wbody" id="zonefilter"></div>
+    </section>
+
     <section class="card">
       <div class="card-h">
         <h2>Loadout</h2>
@@ -375,7 +384,7 @@ a{color:var(--brass-dim)}
       </div>
       <div class="doll" id="doll"></div>
       <dl class="totals" id="totals"></dl>
-      <div class="data-note" id="zonesum"></div>
+      <div class="data-note" id="zonesum" hidden></div>
     </section>
 
     <section class="card">
@@ -2225,7 +2234,11 @@ function renderTotals(){
 function renderZoneSum(){
   const el = document.getElementById("zonesum");
   const eq = Object.values(state.equipped).map(e => byId[e.itemId]).filter(Boolean);
-  if(!eq.length){ el.innerHTML = ""; return; }
+  /* .data-note carries padding, a border-top and a background, so clearing
+     innerHTML alone still leaves a visible empty strip under the Loadout card
+     on first load. Hide the element itself. */
+  if(!eq.length){ el.innerHTML = ""; el.hidden = true; return; }
+  el.hidden = false;
   const c = {};
   eq.forEach(i => zonesOf(i).forEach(z => c[z] = (c[z]||0)+1));
   const rows = Object.entries(c).sort((a,b) => b[1]-a[1] || a[0].localeCompare(b[0]));
@@ -2234,6 +2247,81 @@ function renderZoneSum(){
     (only ? ` · ${only} contributing a single piece` : "") + `<br>` +
     rows.map(([z,n]) => `${esc(z)} <span style="color:var(--brass)">${n}</span>`).join(" · ") +
     (state.zones.size ? `<br><span style="color:var(--faint)">Browser is filtered to ${state.zones.size} zone${state.zones.size===1?"":"s"}.</span>` : "");
+}
+
+/* ---------------- render: zone filter ----------------
+   This lives outside the drawer on purpose. state.zones is a GLOBAL filter —
+   it applies to every slot, and it persists as you click through them — so
+   burying its only control inside the drawer's empty-slot branch meant an
+   active filter could sit there invisibly, silently shrinking every list,
+   with no way to see or clear it until you happened to click an empty slot.
+
+   Counts are global for the same reason: they answer "how much of my usable
+   gear comes out of this zone", not "how much of it fits the slot I happen to
+   be looking at". Era, source and class/race still apply, since those really
+   do change what's on the table. */
+function globalZoneCounts(){
+  const act = active(), c = {};
+  let pool = DATA.items;
+  if(state.inEra)    pool = pool.filter(i => !outOfEra(i) && !supersededVersion(i));
+  if(state.src.size) pool = pool.filter(i => (i.source||[]).some(s => state.src.has(s)));
+  pool = pool.filter(i => usableBy(i.classes, act) && raceOk(i, state.race));
+  pool.forEach(i => zonesOf(i).forEach(z => c[z] = (c[z]||0) + 1));
+  return c;
+}
+
+function renderZones(){
+  const el = document.getElementById("zonefilter");
+  if(!el) return;
+  const counts = globalZoneCounts();
+  const zAll = Object.entries(counts).sort((a,b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  document.getElementById("zonesub").textContent = state.zones.size
+    ? `${state.zones.size} selected` : "all zones";
+
+  let h = `<div class="fbar">
+    <button class="fbtn ${state.zones.size?"on":""}" id="zbtn">
+      <span>${state.zones.size ? `Zones · ${state.zones.size} selected` : "Zones · all"}</span>
+      <span class="cnt">${state.zoneOpen?"▴":"▾"} ${zAll.length}</span></button>
+    ${state.zones.size?`<button class="clr" id="zclr">clear</button>`:""}</div>`;
+
+  if(state.zoneOpen){
+    const q = state.zoneQ.toLowerCase();
+    let list = zAll.filter(([z]) => !q || z.toLowerCase().includes(q));
+    const CAPZ = 60, over = Math.max(0, list.length - CAPZ);
+    list = list.slice(0, CAPZ);
+    /* A selected zone must stay visible even when nothing usable comes out of
+       it, or you can't untick it without clearing the whole filter. */
+    for(const z of state.zones)
+      if(!list.some(([n]) => n === z)) list.push([z, counts[z] || 0]);
+    h += `<div class="zpanel">
+      <input type="search" id="zq" placeholder="Find a zone…" value="${esc(state.zoneQ)}">
+      <div class="zlist">${list.map(([z,n]) =>
+        `<button class="zchip ${state.zones.has(z)?"on":""} ${n?"":"dim"}" data-zone="${esc(z)}">
+          ${esc(z)} <span class="n">${n}</span></button>`).join("")}
+        ${over?`<div class="zmore">+${over} more — type above to narrow.</div>`:""}
+        ${zAll.length?"":`<div class="zmore">No zone data in the loaded set.</div>`}</div></div>`;
+  }
+
+  if(state.zones.size)
+    h += `<div class="note">Every slot you open stays inside these zones — build
+      the whole set out of one farm route, then clear it.</div>`;
+
+  el.innerHTML = h;
+
+  const zb = el.querySelector("#zbtn");
+  if(zb) zb.onclick = () => { state.zoneOpen = !state.zoneOpen; renderZones(); };
+  const zc = el.querySelector("#zclr");
+  if(zc) zc.onclick = () => { state.zones.clear(); render(); };
+  el.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => {
+    const z = b.dataset.zone;
+    state.zones.has(z) ? state.zones.delete(z) : state.zones.add(z);
+    render();                        // the drawer and totals track the filter too
+  });
+  const zq = el.querySelector("#zq");
+  if(zq) zq.oninput = () => { state.zoneQ = zq.value; renderZones();
+    const n = el.querySelector("#zq");
+    n.focus(); n.setSelectionRange(n.value.length, n.value.length); };
 }
 
 /* ---------------- render: character sheet ----------------
@@ -2541,8 +2629,6 @@ function renderDrawer(){
 
   const srcCounts = {};
   pool.filter(byZone).forEach(i => (i.source||[]).forEach(s => srcCounts[s] = (srcCounts[s]||0)+1));
-  const zoneCounts = {};
-  pool.filter(bySrc).forEach(i => zonesOf(i).forEach(z => zoneCounts[z] = (zoneCounts[z]||0)+1));
 
   const preFilter = pool.length;
   pool = pool.filter(bySrc).filter(byZone);
@@ -2568,32 +2654,8 @@ function renderDrawer(){
   const SRC = [["drop","Drops"],["quest","Quest"],["vendor","Vendor"],["craft","Crafted"],["forage","Forage"]];
   let h = `<div class="search"><input type="search" id="q" placeholder="Filter by name, zone or mob…" value="${esc(state.q)}"></div>`;
 
-  /* ---- zone facet ---- */
-  const zAll = Object.entries(zoneCounts)
-    .sort((a,b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  h += `<div class="fbar">
-    <button class="fbtn ${state.zones.size?"on":""}" id="zbtn">
-      <span>${state.zones.size ? `Zones · ${state.zones.size} selected` : "Zones · all"}</span>
-      <span class="cnt">${state.zoneOpen?"▴":"▾"} ${zAll.length}</span></button>
-    ${state.zones.size?`<button class="clr" id="zclr">clear</button>`:""}</div>`;
-
-  if(state.zoneOpen){
-    const q = state.zoneQ.toLowerCase();
-    let list = zAll.filter(([z]) => !q || z.toLowerCase().includes(q));
-    const CAPZ = 60, over = Math.max(0, list.length - CAPZ);
-    list = list.slice(0, CAPZ);
-    /* A selected zone must stay visible even when this slot has nothing in it,
-       or you can't untick it without clearing the whole filter. */
-    for(const z of state.zones)
-      if(!list.some(([n]) => n === z)) list.push([z, zoneCounts[z] || 0]);
-    h += `<div class="zpanel">
-      <input type="search" id="zq" placeholder="Find a zone…" value="${esc(state.zoneQ)}">
-      <div class="zlist">${list.map(([z,n]) =>
-        `<button class="zchip ${state.zones.has(z)?"on":""} ${n?"":"dim"}" data-zone="${esc(z)}">
-          ${esc(z)} <span class="n">${n}</span></button>`).join("")}
-        ${over?`<div class="zmore">+${over} more — type above to narrow.</div>`:""}
-        ${zAll.length?"":`<div class="zmore">No zone data for this slot.</div>`}</div></div>`;
-  }
+  /* The zone facet used to live here. It's a global filter, so it now has its
+     own always-visible card — see renderZones(). */
 
   h += `<div class="sortbar"><label for="sort">Sort</label><select id="sort">${SORTS.map(([k,l]) =>
       `<option value="${k}" ${state.sort===k?"selected":""}>${l}</option>`).join("")}</select></div>
@@ -2603,8 +2665,8 @@ function renderDrawer(){
         ${state.inEra ? `${esc(state.era.replace(/ Era$/,""))} only${hiddenEra?` · ${hiddenEra} hidden`:""}` : "Showing all eras"}</button></div>`;
 
   if(state.zones.size)
-    h += `<div class="note"><b>Filtered to ${state.zones.size} zone${state.zones.size===1?"":"s"}:</b>
-      ${[...state.zones].map(esc).join(" · ")}.<br>This sticks as you click through slots — build the whole set out of one route, then clear it.</div>`;
+    h += `<div class="note"><b>Zone filter active:</b> ${[...state.zones].map(esc).join(" · ")}.
+      Change it in the Zones panel.</div>`;
   if(sdef.a === "*")
     h += `<div class="note"><b>Any slot.</b> Takes any equippable item at full stats — a second shield for AC, a spare breastplate, a boot dagger for backstab. Class and race rules still apply.</div>`;
 
@@ -2633,18 +2695,6 @@ function renderDrawer(){
   const so = document.getElementById("sort");
   if(so) so.onchange = () => { state.sort = so.value; renderDrawer(); };
 
-  const zb = document.getElementById("zbtn");
-  if(zb) zb.onclick = () => { state.zoneOpen = !state.zoneOpen; renderDrawer(); };
-  const zc = document.getElementById("zclr");
-  if(zc) zc.onclick = () => { state.zones.clear(); render(); };
-  d.querySelectorAll("[data-zone]").forEach(b => b.onclick = () => {
-    const z = b.dataset.zone;
-    state.zones.has(z) ? state.zones.delete(z) : state.zones.add(z);
-    render();                       // totals summary tracks the filter too
-  });
-  const zq = document.getElementById("zq");
-  if(zq) zq.oninput = () => { state.zoneQ = zq.value; renderDrawer();
-    const n = document.getElementById("zq"); n.focus(); n.setSelectionRange(n.value.length,n.value.length); };
   d.querySelectorAll("[data-srcf]").forEach(b => b.onclick = () => {
     const k = b.dataset.srcf;
     state.src.has(k) ? state.src.delete(k) : state.src.add(k);
@@ -2682,7 +2732,7 @@ function renderEraNote(){
                 : "unreleased — shows gear EQL doesn't have yet";
 }
 
-function render(){ renderEraNote(); renderWeights(); renderDoll(); renderTotals(); renderZoneSum(); renderChar(); renderLog(); renderDrawer(); renderDataNote();
+function render(){ renderEraNote(); renderWeights(); renderZones(); renderDoll(); renderTotals(); renderZoneSum(); renderChar(); renderLog(); renderDrawer(); renderDataNote();
   document.getElementById("dollsub").textContent =
     `${Object.keys(state.equipped).length}/${SLOTS.length} slots · ${active().join(" / ")}`;
 }
@@ -2750,45 +2800,58 @@ function initControls(){
   };
 }
 
-async function autoLoadHostedData() {
-  try {
-    // 1. Fetch the items data
-    const itemRes = await fetch('./items.json');
-    if (itemRes.ok) {
-      const j = await itemRes.json();
-      const items = Array.isArray(j) ? j : (j.items || []);
-      DATA = {
-        source: j.source || "GitHub Pages Hosted",
-        scraped: j.scraped || new Date().toISOString(),
-        items: items,
-        seed: false
-      };
-      // Rebuild the data index with the new items
-      reindex();
-    } else {
-      console.warn("items.json not found. status:", itemRes.status);
+/* ---------------- boot ----------------
+   On a hosted deploy (GitHub Pages and friends) items.json and chardata.json
+   sit next to this file, so fetch them rather than making the user click
+   "Load item data" every visit.
+
+   initControls() and render() are called at the END, once, after both fetches
+   have settled. Calling them up front is the race: render() reads DATA and
+   derivedWeights() reads CHAR.stat_weights, so an early first paint shows the
+   seed data and a weight vector built from the default character table, and
+   nothing re-runs when the real files land.
+
+   Note both fetches are in their own try/catch, and the boot calls are in
+   `finally`. A missing or malformed file must not cost you a working planner —
+   it falls back to the built-in seed and says so. That also covers opening
+   this file over file://, where fetch throws outright. */
+async function autoLoadHostedData(){
+  try{
+    try{
+      const res = await fetch("./items.json");
+      if(res.ok){
+        const j = await res.json();
+        const items = Array.isArray(j) ? j : j.items;
+        if(!Array.isArray(items)) throw new Error("no items array");
+        DATA = {source:j.source || "hosted items.json", scraped:j.scraped,
+                items, seed:false};
+        reindex();
+      } else {
+        console.warn("items.json not loaded — HTTP", res.status);
+      }
+    }catch(e){
+      console.warn("items.json unavailable, using built-in seed:", e.message);
     }
 
-    // 2. Fetch the character data
-    const charRes = await fetch('./chardata.json');
-    if (charRes.ok) {
-      CHAR = await charRes.json();
-    } else {
-      console.warn("chardata.json not found. Using defaults.");
+    try{
+      const res = await fetch("./chardata.json");
+      if(res.ok){
+        const j = await res.json();
+        /* Same sanity check the manual loader uses — a chardata file missing
+           races{} or classes{} would break attribute totals silently. */
+        if(j.races && j.classes) CHAR = j;
+        else console.warn("chardata.json has no races/classes — keeping defaults");
+      }
+    }catch(e){
+      console.warn("chardata.json unavailable, using defaults:", e.message);
     }
-  } catch (err) {
-    console.error("Error processing hosted data:", err);
+  } finally {
+    initControls();
+    render();
   }
-
-  // 3. INITIALIZE controls and RENDER only AFTER all data is perfectly loaded!
-  initControls();
-  render();
 }
 
-// Kick off the auto-load
 autoLoadHostedData();
-
-
 </script>
 </body>
 </html>
