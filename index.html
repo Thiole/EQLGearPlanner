@@ -505,9 +505,27 @@ function scaleStat(v, xp){
   return -Math.floor(Math.abs(v) * (1 + cum));
 }
 
+/* Haste does NOT take the +10%/tier percentage. Every other stat does; haste
+   gets ONLY the flat +1-per-tier floor.
+
+   OBSERVED, from the wiki's own item-level slider on Cloak_of_Flames: the
+   ladder is 36, 37, 38 ... 46. The percentage rule would give 36, 39, 43, 46,
+   50 ... 72, and 72 is not what the slider shows. The Item Upgrade System page
+   says "cumulative 10% bonus to the item's stats" without carving haste out,
+   so this exception is NOT derivable from that page — it is read off the
+   rendered slider, which ships as the ext.itemLevelSlider module rather than
+   as markup.
+
+   Mid-tier creep does not apply either: the page states "Mid-Tier bonuses
+   like this do NOT award the minimum bonus to a stat", and the +1 floor is
+   all haste gets, so haste moves only at tier boundaries. */
+const NO_PCT_STATS = new Set(["HASTE"]);
+function scaleHaste(v, xp){ return v ? v + tierOf(xp) : v; }
+
 function scaledItem(item, xp){
   const stats = {};
-  for(const [k,v] of Object.entries(item.stats||{})) stats[k] = scaleStat(v, xp);
+  for(const [k,v] of Object.entries(item.stats||{}))
+    stats[k] = NO_PCT_STATS.has(k) ? scaleHaste(v, xp) : scaleStat(v, xp);
   const o = {stats, tier:tierOf(xp), xp, cum:cumBonus(xp)};
   if(item.dmg) o.dmg = scaleStat(item.dmg, xp);
   if(item.delay) o.delay = item.delay;                 // never scales
@@ -1601,8 +1619,77 @@ function scoreParts(i, slotKey, w = activeWeights(), xp = TIER_XP[state.planTier
   const ratio = (SWINGS.has(slotKey) && sc.dmg && sc.delay)
     ? (sc.dmg / sc.delay) * (w.RATIO || 0) : 0;
   const effect = itemEffectValue(i, w, covered);
-  return {stat, ratio, effect, total:stat + ratio + effect};
+  const haste = hasteValue(sc, w, covered, i);
+  return {stat, ratio, effect, haste, total: stat + ratio + effect + haste};
 }
+
+/* ---- HASTE ----
+   Sourced from eqlwiki.com/Haste_Guide, not estimated. The three rules that
+   matter here, quoted in substance:
+
+     - "For haste items, only the item with highest haste % counts."
+       So worn haste is a MAX across gear, never a sum.
+     - "Haste is measured in Rate of Attack Increase, NOT Delay Decrease",
+       and hasted delay = delay / (1 + haste).
+     - Total haste is CAPPED by level: 55% at 1-30, 75% at 31-50 (1% per level
+       over 30), 100% at 51-60.
+
+   The delay formula is what fixes the valuation. Hasted ratio is
+     dmg / (delay/(1+h))  =  ratio * (1+h)
+   so h points of haste are worth h% of the mainhand's ENTIRE ratio
+   contribution. The previous code used a flat 3.5-per-point constant derived
+   from a guessed "typical" ratio of 1.75; that is only correct for a weapon
+   that happens to have that ratio, and it ignored the cap completely — a
+   tier-10 Cloak of Flames reads 72% haste, of which at level 50 you can use
+   none above 75% total, so paying for all 72 overvalued it badly.
+
+   Cross-check against the wiki's own worked example: Lamentation 9/19 with
+   COF 36% gives 19/1.36 = 13.97, ratio 0.47 -> 0.64, which the table calls a
+   35.7% improvement. (1+0.36) = 1.36, and 0.47*1.36 = 0.64. The model below
+   reproduces that exactly. */
+const HASTE_CAPS = [[30, 55], [50, 75], [60, 100]];   // [max level, cap %]
+/* No level control exists in the UI yet, so this is the assumed planning
+   level. 50 is the current era's ceiling; change it (or wire it to a control)
+   and every haste number below follows. */
+const PLAN_LEVEL = 50;
+function hasteCap(level = PLAN_LEVEL){
+  for(const [lv, cap] of HASTE_CAPS) if(level <= lv) return cap;
+  return 100;
+}
+
+const HASTE_COV = "%HASTE";     // reserved: parseEffect never yields a % family
+
+/* The ratio haste is multiplying. Haste speeds up whatever you are actually
+   swinging, so the mainhand's own ratio is the honest multiplicand — a 1.4
+   ratio mainhand gets less out of a haste cloak than a 2.2 one, and the old
+   flat constant could not express that. Falls back to the wiki's own example
+   weapon class when no mainhand is equipped yet. */
+const DEFAULT_RATIO = 0.63;     // Wurmslayer 25/40, the Haste Guide's example
+function mainhandRatio(xp = TIER_XP[state.planTier] || 0){
+  const e = state.equipped.PRIMARY;
+  const it = e && byId[e.itemId];
+  if(!it) return DEFAULT_RATIO;
+  const sc = scaledItem(it, e.xp != null ? e.xp : xp);
+  return (sc.dmg && sc.delay) ? sc.dmg / sc.delay : DEFAULT_RATIO;
+}
+
+/* Worn haste, priced marginally against the best source already equipped and
+   clipped at the level cap. Returns 0 for a duplicate or a downgrade. */
+function hasteValue(sc, w = activeWeights(), covered = null, item = null){
+  /* haste_type comes from the scraper: "worn" and "weapon" are both permanent
+     item haste and share the highest-wins pool; "pet" is Muzzle of Mardu,
+     which the Haste Guide flags as pet-only and which must never count toward
+     the player's own attack speed. */
+  if(item && item.haste_type === "pet") return 0;
+  const h = sc.stats?.HASTE || 0;
+  if(!h || !w.RATIO) return 0;               // no melee in the trio -> worthless
+  const cap = hasteCap();
+  const have = Math.min(covered ? (covered[HASTE_COV] || 0) : 0, cap);
+  const gain = Math.min(h, cap) - have;      // cap clips BOTH ends
+  if(gain <= 0) return 0;
+  return (gain / 100) * mainhandRatio() * w.RATIO;
+}
+
 const scoreItem = (i, slotKey, w, xp, covered) =>
   scoreParts(i, slotKey, w, xp, covered).total;
 
@@ -1652,16 +1739,23 @@ function coverageExcluding(skipSlot){
       const {family, rank} = parseEffect(it.effects[t].name);
       cov[family] = Math.max(cov[family] || 0, rank);
     }
+    /* Haste at the piece's OWN tier, since that is the number actually in
+       force — a 36% cloak you have not levelled is not yet beating a 30% belt
+       you have. */
+    const h = it.haste_type === "pet" ? 0 : (scaledItem(it, e.xp || 0).stats.HASTE || 0);
+    if(h > (cov[HASTE_COV] || 0)) cov[HASTE_COV] = h;
   }
   return cov;
 }
-/** fold one item's native effects into a running coverage map */
-function addCoverage(cov, i){
+/** fold one item's native effects (and haste) into a running coverage map */
+function addCoverage(cov, i, xp = TIER_XP[state.planTier] || 0){
   for(const t of ["focus","click","worn","proc"]){
     if(!i.effects?.[t]) continue;
     const {family, rank} = parseEffect(i.effects[t].name);
     cov[family] = Math.max(cov[family] || 0, rank);
   }
+  const h = i.haste_type === "pet" ? 0 : (scaledItem(i, xp).stats.HASTE || 0);
+  if(h > (cov[HASTE_COV] || 0)) cov[HASTE_COV] = h;
   return cov;
 }
 
@@ -2285,18 +2379,32 @@ const ATTRS = ["STR","STA","AGI","DEX","WIS","INT","CHA"];
 /** gear contribution, at each item's current tier */
 function gearStats(){
   const t = {AC:0,HP:0,MANA:0,STR:0,STA:0,AGI:0,DEX:0,WIS:0,INT:0,CHA:0};
+  /* HASTE is deliberately NOT in the additive table above. Only the single
+     best worn source applies, so it is a max, not a sum — a loadout with a
+     36% cloak and a 20% belt is at 36%, and showing +56 would be a lie you
+     could gear into. */
+  let haste = 0, hasteFrom = null;
   Object.values(state.equipped).forEach(e => {
     const it = byId[e.itemId]; if(!it) return;
     const s = scaledItem(it, e.xp||0).stats;
     for(const k in t) if(s[k]) t[k] += s[k];
+    const ih = it.haste_type === "pet" ? 0 : (s.HASTE || 0);
+    if(ih > haste){ haste = ih; hasteFrom = it.name; }
   });
+  t.HASTE = haste;
+  gearStats.hasteFrom = hasteFrom;
   return t;
 }
 
 function renderTotals(){
   const t = gearStats();
-  document.getElementById("totals").innerHTML = Object.entries(t).map(([k,v]) =>
-    `<div class="tot"><dt>${k}</dt><dd class="${v?"":"z"}">${v>0?"+":""}${v}</dd></div>`).join("");
+  document.getElementById("totals").innerHTML = Object.entries(t).map(([k,v]) => {
+    const tip = k === "HASTE" && gearStats.hasteFrom
+      ? ` title="best worn source: ${esc(gearStats.hasteFrom)} — haste does not stack"` : "";
+    const lbl = k === "HASTE" ? "HASTE" : k;
+    const suf = k === "HASTE" && v ? "%" : "";
+    return `<div class="tot"${tip}><dt>${lbl}</dt><dd class="${v?"":"z"}">${v>0?"+":""}${v}${suf}</dd></div>`;
+  }).join("");
 }
 
 /* ---------------- render: where the set comes from ----------------
