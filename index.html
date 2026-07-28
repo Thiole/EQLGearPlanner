@@ -1483,6 +1483,7 @@ function sortKey(i, act, slotKey){
    ============================================================ */
 const W_STATS = ["AC","HP","MANA","STR","STA","AGI","DEX","WIS","INT","CHA"];
 const W_SPECIAL = [
+  ["HASTE",   "per 1% haste, best worn source only"],
   ["RATIO",   "per 1.0 dmg/delay"],
   ["OFFHAND", "share of offhand dmg that lands"],
   ["EFFECT",  "each focus/click/worn (proc excluded — graft it)"],
@@ -1521,6 +1522,11 @@ const W_HP_HYBRID = 0.3;   // melee that casts: PAL SHD RNG BRD BST
 const W_HP_CASTER = 0.2;   // pure caster: CLR DRU SHM NEC WIZ MAG ENC
 const W_MANA_BASE = 0.05, W_MANA_PER_CASTER = 0.05;   // 0.05 solo-melee -> 0.20 triple caster
 const W_RATIO_MELEE = 200;    // dmg/delay — the dominant term on a weapon
+/* Points of score per 1% haste. A plain weight like every other field, so it
+   is yours to retune. At 4, Cloak of Flames (36%) prices at 144 on an empty
+   back slot — comparable to ~36 AC for a melee trio. Zero for a trio with no
+   melee in it, the same rule RATIO uses. */
+const W_HASTE_MELEE = 4;
 const W_EFFECT = 4;
 
 /* Anything that spends mana. Hybrids count: a paladin's mana is real, it's
@@ -1567,6 +1573,7 @@ function derivedWeights(){
      a weapon and the vector has to say so: at 200, one point of dmg/delay
      outranks roughly 50 AC, which is the ordering you want on a mainhand. */
   w.RATIO   = act.some(c => MELEE.has(c)) ? W_RATIO_MELEE : 0;
+  w.HASTE   = act.some(c => MELEE.has(c)) ? W_HASTE_MELEE : 0;
   w.OFFHAND = 0.6;
   w.EFFECT  = W_EFFECT;
   w.WT      = 0;
@@ -1659,37 +1666,6 @@ function hasteCap(level = PLAN_LEVEL){
 
 const HASTE_COV = "%HASTE";     // reserved: parseEffect never yields a % family
 
-/* The ratio haste is multiplying. Haste speeds up whatever you are actually
-   swinging, so the mainhand's own ratio is the honest multiplicand — a 1.4
-   ratio mainhand gets less out of a haste cloak than a 2.2 one, and the old
-   flat constant could not express that. Falls back to the wiki's own example
-   weapon class when no mainhand is equipped yet. */
-const DEFAULT_RATIO = 0.63;     // Wurmslayer 25/40, the Haste Guide's example
-function mainhandRatio(xp = TIER_XP[state.planTier] || 0){
-  const e = state.equipped.PRIMARY;
-  const it = e && byId[e.itemId];
-  if(!it) return DEFAULT_RATIO;
-  const sc = scaledItem(it, e.xp != null ? e.xp : xp);
-  return (sc.dmg && sc.delay) ? sc.dmg / sc.delay : DEFAULT_RATIO;
-}
-
-/* Worn haste, priced marginally against the best source already equipped and
-   clipped at the level cap. Returns 0 for a duplicate or a downgrade. */
-function hasteValue(sc, w = activeWeights(), covered = null, item = null){
-  /* haste_type comes from the scraper: "worn" and "weapon" are both permanent
-     item haste and share the highest-wins pool; "pet" is Muzzle of Mardu,
-     which the Haste Guide flags as pet-only and which must never count toward
-     the player's own attack speed. */
-  if(item && item.haste_type === "pet") return 0;
-  const h = sc.stats?.HASTE || 0;
-  if(!h || !w.RATIO) return 0;               // no melee in the trio -> worthless
-  const cap = hasteCap();
-  const have = Math.min(covered ? (covered[HASTE_COV] || 0) : 0, cap);
-  const gain = Math.min(h, cap) - have;      // cap clips BOTH ends
-  if(gain <= 0) return 0;
-  return (gain / 100) * mainhandRatio() * w.RATIO;
-}
-
 const scoreItem = (i, slotKey, w, xp, covered) =>
   scoreParts(i, slotKey, w, xp, covered).total;
 
@@ -1724,6 +1700,32 @@ function itemEffectValue(i, w = activeWeights(), covered = null){
          (have ? effectValue(family, have, t, w) : 0);
   }
   return v;
+}
+
+/* Worn haste, priced marginally against the best source already equipped and
+   clipped at the level cap. Returns 0 for a duplicate or a downgrade.
+
+   The weight is a flat per-point number now (w.HASTE), not derived from the
+   mainhand's ratio. That trades a little theoretical accuracy — haste really
+   does multiply whatever you are swinging, so its true worth varies with the
+   weapon — for a field you can see and retune like every other stat. If you
+   want the derived behaviour back, the exact form is
+       (gain/100) * mainhandRatio * w.RATIO
+   which at a 0.63 ratio mainhand corresponds to w.HASTE ≈ 1.26.
+
+   What stays, because it is mechanics rather than opinion:
+     - only the single highest-% worn source counts (Haste Guide)
+     - the level cap clips both the candidate and what you already have
+     - pet-only haste never counts toward player attack speed */
+function hasteValue(sc, w = activeWeights(), covered = null, item = null){
+  if(item && item.haste_type === "pet") return 0;
+  const h = sc.stats?.HASTE || 0;
+  if(!h || !w.HASTE) return 0;
+  const cap = hasteCap();
+  const have = Math.min(covered ? (covered[HASTE_COV] || 0) : 0, cap);
+  const gain = Math.min(h, cap) - have;
+  if(gain <= 0) return 0;
+  return gain * w.HASTE;
 }
 
 /** family -> best rank carried natively by everything equipped, optionally
