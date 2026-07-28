@@ -1491,7 +1491,16 @@ const effectCount = i => SCORED_EFFECTS.filter(t => i.effects?.[t]).length;
    1.2-1.5), so flat HP on an item is worth materially less to them than the
    1.0 the old table gave it. Adjust here, or flip to Custom in the UI. */
 const W_AC_MELEE = 4, W_AC_OTHER = 3;
-const W_HP_MELEE = 0.6, W_HP_OTHER = 0.8;
+/* HP runs 0.2 (pure caster) -> 0.4 (melee / non-caster), with hybrids at the
+   midpoint. Note this INVERTS the previous ordering, which had casters valuing
+   flat HP more than melee (0.8 vs 0.6) on the grounds that a melee's HP comes
+   mostly from STA and so flat HP is redundant to them. The scale below says
+   the opposite: HP is worth most to whoever is being hit. Both halves of the
+   range also drop well below the old numbers, so HP now weighs materially
+   less against AC across the board. */
+const W_HP_MELEE = 0.4;    // no mana at all: WAR MNK ROG BER
+const W_HP_HYBRID = 0.3;   // melee that casts: PAL SHD RNG BRD BST
+const W_HP_CASTER = 0.2;   // pure caster: CLR DRU SHM NEC WIZ MAG ENC
 const W_MANA_BASE = 0.05, W_MANA_PER_CASTER = 0.05;   // 0.05 solo-melee -> 0.20 triple caster
 const W_RATIO_MELEE = 200;    // dmg/delay — the dominant term on a weapon
 const W_EFFECT = 4;
@@ -1518,7 +1527,12 @@ function derivedWeights(){
   const mean = f => act.length ? act.reduce((s,c) => s + f(c), 0) / act.length : 0;
   if(act.length){
     w.AC = mean(c => MELEE.has(c) ? W_AC_MELEE : W_AC_OTHER);
-    w.HP = mean(c => MELEE.has(c) ? W_HP_MELEE : W_HP_OTHER);
+    /* Three-point, because MELEE already contains the five hybrids and a flat
+       melee/caster split would hand a paladin the same HP weight as a warrior.
+       For the plain two-point version, drop the middle branch. */
+    w.HP = mean(c => !MELEE.has(c) ? W_HP_CASTER
+                   : usesMana(c)   ? W_HP_HYBRID
+                                   : W_HP_MELEE);
     /* Flat MANA is nearly worthless next to the casting stat, which returns
        far more mana per point AND carries everything else it carries — so
        INT/WIS keep their ~2.0 while MANA drops two orders of magnitude. It
