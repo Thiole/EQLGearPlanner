@@ -1295,6 +1295,7 @@ function normalizeItems(items){
 /* ---------------- state ---------------- */
 let DATA = SEED;
 let byId = {};
+let _zoneLv = null;                 // zone -> [minLevel,maxLevel]; see zoneLevelRange
 const state = {
   classes:["WAR","SHD","ROG"], race:"OGR",
   equipped:{},              // slotKey -> {itemId, xp, exalts:{type:srcItemId}}
@@ -1328,10 +1329,12 @@ const state = {
      Nothing here changes unless you touch the selector. */
   handMode:"auto",          // auto | twohand | shield | dual
 
-  /* Mob-level ceiling for dropped gear. 0 = off. Only meaningful when a
-     moblevels.json sits next to index.html; without one the slider never
-     renders and this is inert. */
-  mobLvl:0,
+  /* Mob-level WINDOW for dropped gear, as [min, max]. max 0 = off. A window
+     rather than a ceiling because the useful question is usually "what can I
+     farm at my level right now" — a ceiling alone still buries you in level-5
+     rat drops. Only meaningful when a moblevels.json sits next to index.html;
+     without one the control never renders and this is inert. */
+  mobLvlMin:0, mobLvl:0, mobOpen:false,
 
   /* Bard-only hand preference: hold the actual instrument. Stored as a plain
      flag but read only through bardInstrOn(), which also requires a live BRD
@@ -1345,7 +1348,10 @@ const state = {
    a zone facet, or filtering by zone would silently delete them. */
 const NOZONE = "(no drop zone)";
 const zonesOf = i => (i.zones && i.zones.length) ? i.zones : [NOZONE];
-const reindex = () => { normalizeItems(DATA.items); byId = {}; DATA.items.forEach(i => byId[i.id] = i); };
+const reindex = () => { normalizeItems(DATA.items); byId = {}; DATA.items.forEach(i => byId[i.id] = i);
+  /* zone level spans are derived from DATA.items + MOBLEVELS — drop the memo
+     so a newly loaded file doesn't get described by the old one's numbers. */
+  _zoneLv = null; };
 reindex();
 
 /* ---------------- rules engine ---------------- */
@@ -1496,8 +1502,34 @@ function itemMobLevel(i){
 const passesMobLevel = i => {
   if(!state.mobLvl) return true;
   const lv = itemMobLevel(i);
-  return lv === null || lv <= state.mobLvl;
+  /* Unknown level always passes — see itemMobLevel. A missing row in an
+     optional side file must never hide gear. */
+  return lv === null || (lv >= state.mobLvlMin && lv <= state.mobLvl);
 };
+
+/* Level span of the mobs that actually drop something, per zone. Drives the
+   hint on each zone chip: with a window set, the zones that can still feed it
+   are the ones worth opening.
+
+   Built once for every zone in a single pass, not per zone on demand — the
+   panel asks for up to 60 chips and a naive lookup would walk all ~6900 items
+   each time, which is a visible hitch on a phone. Invalidated by reindex()
+   along with byId, since a fresh items.json changes the answer. */
+function zoneLevelRange(zone){
+  if(!_zoneLv){
+    _zoneLv = {};
+    for(const i of DATA.items)
+      for(const d of i.drops || [])
+        for(const m of d.mobs || []){
+          const lv = MOBLEVELS[String(m).toLowerCase()];
+          if(lv == null) continue;
+          const cur = _zoneLv[d.zone];
+          if(!cur) _zoneLv[d.zone] = [lv, lv];
+          else { if(lv < cur[0]) cur[0] = lv; if(lv > cur[1]) cur[1] = lv; }
+        }
+  }
+  return _zoneLv[zone] || null;
+}
 
 function fitsSlot(item, slotKey){
   const s = SLOTS.find(x => x.k === slotKey);
@@ -2934,7 +2966,39 @@ function renderZones(){
   document.getElementById("zonesub").textContent = state.zones.size
     ? `${state.zones.size} selected` : "all zones";
 
-  let h = `<div class="fbar">
+  let h = "";
+
+  /* Mob-level window. Renders only when moblevels.json actually loaded — a
+     slider over data that doesn't exist would filter nothing and look broken.
+     Sits with Zones because both answer "where am I farming", and both are
+     global: every slot you open obeys them. */
+  if(Object.keys(MOBLEVELS).length){
+    const on = !!state.mobLvl;
+    h += `<div class="fbar" style="flex-wrap:wrap;gap:6px">
+      <button class="fbtn ${on?"on":""}" id="mlbtn" style="flex:1 1 100%">
+        <span>${on ? `Mob level · ${state.mobLvlMin}–${state.mobLvl}` : "Mob level · any"}</span>
+        <span class="cnt">${state.mobOpen?"▴":"▾"}</span></button>
+      ${on?`<button class="clr" id="mlclr">clear</button>`:""}</div>`;
+    if(state.mobOpen){
+      h += `<div class="zpanel" style="padding:8px 10px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span class="lbl" style="min-width:2.6em">min</span>
+          <input type="range" id="mlmin" min="0" max="70" step="1"
+            value="${state.mobLvlMin}" style="flex:1">
+          <span id="mlminv" style="min-width:2em;text-align:right">${state.mobLvlMin}</span></div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span class="lbl" style="min-width:2.6em">max</span>
+          <input type="range" id="mlmax" min="0" max="70" step="1"
+            value="${state.mobLvl}" style="flex:1">
+          <span id="mlmaxv" style="min-width:2em;text-align:right">${state.mobLvl||"off"}</span></div>
+        <div class="zmore" style="margin-top:6px">Max at 0 turns the filter off.
+          Hides dropped gear whose easiest source mob falls outside the window.
+          Vendor, craft and forage items are never hidden, and neither is
+          anything whose mob has no level on the wiki.</div></div>`;
+    }
+  }
+
+  h += `<div class="fbar">
     <button class="fbtn ${state.zones.size?"on":""}" id="zbtn">
       <span>${state.zones.size ? `Zones · ${state.zones.size} selected` : "Zones · all"}</span>
       <span class="cnt">${state.zoneOpen?"▴":"▾"} ${zAll.length}</span></button>
@@ -2951,9 +3015,18 @@ function renderZones(){
       if(!list.some(([n]) => n === z)) list.push([z, counts[z] || 0]);
     h += `<div class="zpanel">
       <input type="search" id="zq" placeholder="Find a zone…" value="${esc(state.zoneQ)}">
-      <div class="zlist">${list.map(([z,n]) =>
-        `<button class="zchip ${state.zones.has(z)?"on":""} ${n?"":"dim"}" data-zone="${esc(z)}">
-          ${esc(z)} <span class="n">${n}</span></button>`).join("")}
+      <div class="zlist">${list.map(([z,n]) => {
+        /* Level hint per zone: with a window set, this is what tells you which
+           zones can still feed it without opening each one. A zone whose mobs
+           all sit outside the window is dimmed — not hidden, because you may
+           want it anyway for a vendor or quest item. */
+        const r = Object.keys(MOBLEVELS).length ? zoneLevelRange(z) : null;
+        const outside = state.mobLvl && r &&
+          (r[1] < state.mobLvlMin || r[0] > state.mobLvl);
+        return `<button class="zchip ${state.zones.has(z)?"on":""} ${(n && !outside)?"":"dim"}" data-zone="${esc(z)}"
+          ${r?`title="Mobs here that drop gear: level ${r[0]}–${r[1]}"`:""}>
+          ${esc(z)}${r?` <span class="n" style="opacity:.7">${r[0]}–${r[1]}</span>`:""} <span class="n">${n}</span></button>`;
+      }).join("")}
         ${over?`<div class="zmore">+${over} more — type above to narrow.</div>`:""}
         ${zAll.length?"":`<div class="zmore">No zone data in the loaded set.</div>`}</div></div>`;
   }
@@ -2963,6 +3036,33 @@ function renderZones(){
       the whole set out of one farm route, then clear it.</div>`;
 
   el.innerHTML = h;
+
+  const mb = el.querySelector("#mlbtn");
+  if(mb) mb.onclick = () => { state.mobOpen = !state.mobOpen; renderZones(); };
+  const mc = el.querySelector("#mlclr");
+  if(mc) mc.onclick = () => { state.mobLvlMin = 0; state.mobLvl = 0; render(); };
+  const mn = el.querySelector("#mlmin"), mx = el.querySelector("#mlmax");
+  if(mn && mx){
+    /* Label tracks the drag; the refilter waits for release, because
+       re-rendering the whole planner per input event fights the gesture —
+       especially on a phone. */
+    mn.oninput = () => el.querySelector("#mlminv").textContent = mn.value;
+    mx.oninput = () => el.querySelector("#mlmaxv").textContent = mx.value || "off";
+    /* Keep the window coherent: dragging one past the other pushes the other
+       along rather than producing an empty range that silently hides
+       everything. */
+    mn.onchange = () => {
+      state.mobLvlMin = +mn.value;
+      if(state.mobLvl && state.mobLvl < state.mobLvlMin) state.mobLvl = state.mobLvlMin;
+      if(!state.mobLvl && state.mobLvlMin) state.mobLvl = 70;   // min implies a window
+      render();
+    };
+    mx.onchange = () => {
+      state.mobLvl = +mx.value;
+      if(state.mobLvl && state.mobLvlMin > state.mobLvl) state.mobLvlMin = state.mobLvl;
+      render();
+    };
+  }
 
   const zb = el.querySelector("#zbtn");
   if(zb) zb.onclick = () => { state.zoneOpen = !state.zoneOpen; renderZones(); };
@@ -3365,18 +3465,12 @@ function renderDrawer(){
       <button class="chip era ${state.inEra?"on":""}" id="erachip" title="Hide gear that isn't obtainable at ${esc(state.era)}, plus superseded versions of items">
         ${state.inEra ? `${esc(state.era.replace(/ Era$/,""))} only${hiddenEra?` · ${hiddenEra} hidden`:""}` : "Showing all eras"}</button></div>`;
 
-  /* Mob-level ceiling. Renders only when a moblevels.json actually loaded —
-     a slider over data that doesn't exist would filter nothing and look
-     broken. Filters only the drop route: vendor, quest, and crafted gear is
-     untouched because mob level says nothing about whether you can buy it. */
-  if(Object.keys(MOBLEVELS).length){
-    const on = !!state.mobLvl;
-    h += `<div class="chips" style="align-items:center">
-      <span class="lbl" title="Hide dropped items whose easiest known source mob is above this level. Items with vendor/craft/forage routes, or with no mob in the level table, are never hidden.">Max mob level</span>
-      <input type="range" id="moblvl" min="0" max="65" step="1" value="${state.mobLvl}"
-        style="flex:1;min-width:120px">
-      <span id="moblvlval" style="min-width:3.5em;color:${on?"var(--fg)":"var(--faint)"}">${on?state.mobLvl:"off"}</span></div>`;
-  }
+  /* The mob-level window lives in the Zones card now — like the zone filter
+     it's global, so a per-slot copy would let two slots disagree. Mirror it
+     here as a read-only note so the drawer explains its own item count. */
+  if(state.mobLvl)
+    h += `<div class="note"><b>Mob level ${state.mobLvlMin}–${state.mobLvl}.</b>
+      Dropped gear outside that window is hidden. Change it in the Zones panel.</div>`;
 
   if(state.zones.size)
     h += `<div class="note"><b>Zone filter active:</b> ${[...state.zones].map(esc).join(" · ")}.
@@ -3407,15 +3501,6 @@ function renderDrawer(){
   d.innerHTML = h;
   const ec = document.getElementById("erachip");
   if(ec) ec.onclick = () => { state.inEra = !state.inEra; renderDrawer(); };
-  const ml = document.getElementById("moblvl");
-  if(ml){
-    /* Live label while dragging, refilter on release — re-rendering the whole
-       drawer per input event would fight the drag. */
-    ml.oninput  = e => { const v=+e.target.value;
-      const lab=document.getElementById("moblvlval");
-      lab.textContent = v||"off"; };
-    ml.onchange = e => { state.mobLvl = +e.target.value; renderDrawer(); };
-  }
   const so = document.getElementById("sort");
   if(so) so.onchange = () => { state.sort = so.value; renderDrawer(); };
 
@@ -3464,7 +3549,7 @@ function renderDataNote(){
    boots clean. */
 const STORE_KEY = "eql-bis:v1";
 const PERSIST_SETS  = ["src","zones","locked"];
-const PERSIST_PLAIN = ["classes","race","equipped","era","inEra","sort","mobLvl",
+const PERSIST_PLAIN = ["classes","race","equipped","era","inEra","sort","mobLvl","mobLvlMin",
                        "wMode","weights","planTier","handMode","bardInstr"];
 
 /* Deliberately NOT saved: view (reopening a drawer on refresh is disorienting),
@@ -3698,6 +3783,9 @@ async function autoLoadHostedData(){
           MOBLEVELS = {};
           for(const [k,v] of Object.entries(j))
             if(typeof v === "number") MOBLEVELS[k.toLowerCase()] = v;
+          /* This fetch lands after reindex(), so the memo it cleared was built
+             (or would be built) without levels. Clear it again here. */
+          _zoneLv = null;
         }
       }
     }catch(e){ /* absent by design on most deploys */ }
