@@ -67,6 +67,33 @@ button{font-family:inherit;color:inherit;cursor:pointer;border:none;background:n
 .zchip.on .n{color:var(--bone)}
 .zchip.dim{opacity:.45}
 .zmore{font-size:10px;color:var(--faint);padding:4px 2px;width:100%}
+/* --- dual-thumb range ---
+   No native two-handle slider exists, so this is two <input type=range>
+   stacked on one track. The inputs themselves are transparent and
+   pointer-events:none; only the THUMBS take pointer events, which is what
+   lets a click near the left thumb reach the min input even though the max
+   input is painted over it. The visible track and the filled span between
+   the thumbs are plain divs underneath. */
+.dual{position:relative;height:30px;margin:2px 0 4px}
+.dual .track{position:absolute;top:13px;left:0;right:0;height:3px;
+  background:var(--edge);border-radius:2px}
+.dual .fill{position:absolute;top:13px;height:3px;background:var(--brass);
+  border-radius:2px}
+.dual input[type=range]{position:absolute;top:0;left:0;width:100%;height:30px;
+  margin:0;padding:0;background:none;border:none;-webkit-appearance:none;
+  appearance:none;pointer-events:none}
+.dual input[type=range]:focus{outline:none}
+.dual input[type=range]::-webkit-slider-runnable-track{background:none;border:none;height:30px}
+.dual input[type=range]::-moz-range-track{background:none;border:none;height:30px}
+.dual input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;
+  pointer-events:auto;width:16px;height:16px;margin-top:7px;border-radius:50%;
+  background:var(--bone);border:2px solid var(--brass);cursor:grab}
+.dual input[type=range]::-moz-range-thumb{pointer-events:auto;width:16px;height:16px;
+  border-radius:50%;background:var(--bone);border:2px solid var(--brass);cursor:grab}
+.dual input[type=range]::-webkit-slider-thumb:active{cursor:grabbing;background:var(--brass)}
+.dual input[type=range]::-moz-range-thumb:active{cursor:grabbing;background:var(--brass)}
+.dualrow{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px}
+.dualrow .cap{color:var(--faint);min-width:2.2em;text-align:center}
 .sortbar{display:flex;gap:6px;align-items:center;padding:8px 0 4px}
 .sortbar label{font-size:9px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
 .sortbar select{flex:1;min-width:0}
@@ -1296,6 +1323,9 @@ function normalizeItems(items){
 let DATA = SEED;
 let byId = {};
 let _zoneLv = null;                 // zone -> [minLevel,maxLevel]; see zoneLevelRange
+/* Top of the mob-level bar. 70 rather than 65: it's a UI bound, and a bar that
+   can't reach the highest mob in the data would quietly exclude it. */
+const MOBLVL_MAX = 70;
 const state = {
   classes:["WAR","SHD","ROG"], race:"OGR",
   equipped:{},              // slotKey -> {itemId, xp, exalts:{type:srcItemId}}
@@ -2980,21 +3010,28 @@ function renderZones(){
         <span class="cnt">${state.mobOpen?"▴":"▾"}</span></button>
       ${on?`<button class="clr" id="mlclr">clear</button>`:""}</div>`;
     if(state.mobOpen){
-      h += `<div class="zpanel" style="padding:8px 10px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <span class="lbl" style="min-width:2.6em">min</span>
-          <input type="range" id="mlmin" min="0" max="70" step="1"
-            value="${state.mobLvlMin}" style="flex:1">
-          <span id="mlminv" style="min-width:2em;text-align:right">${state.mobLvlMin}</span></div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span class="lbl" style="min-width:2.6em">max</span>
-          <input type="range" id="mlmax" min="0" max="70" step="1"
-            value="${state.mobLvl}" style="flex:1">
-          <span id="mlmaxv" style="min-width:2em;text-align:right">${state.mobLvl||"off"}</span></div>
-        <div class="zmore" style="margin-top:6px">Max at 0 turns the filter off.
-          Hides dropped gear whose easiest source mob falls outside the window.
-          Vendor, craft and forage items are never hidden, and neither is
-          anything whose mob has no level on the wiki.</div></div>`;
+      /* A closed window (max 0) still has to show SOMETHING sensible on the
+         bar, so an off filter draws as the full span rather than as two thumbs
+         piled at zero with no fill between them. */
+      const hi = state.mobLvl || MOBLVL_MAX;
+      h += `<div class="zpanel" style="padding:10px 12px">
+        <div class="dualrow">
+          <span class="cap" id="mlminv">${state.mobLvlMin}</span>
+          <div class="dual" style="flex:1">
+            <div class="track"></div>
+            <div class="fill" id="mlfill"></div>
+            <input type="range" id="mlmin" min="0" max="${MOBLVL_MAX}" step="1"
+              value="${state.mobLvlMin}" aria-label="Minimum mob level">
+            <input type="range" id="mlmax" min="0" max="${MOBLVL_MAX}" step="1"
+              value="${hi}" aria-label="Maximum mob level">
+          </div>
+          <span class="cap" id="mlmaxv">${state.mobLvl || "any"}</span></div>
+        <div class="zmore" style="margin-top:2px">Drag the left dot for the
+          floor, the right for the ceiling. Push the right one to ${MOBLVL_MAX}
+          and the min to 0 to turn the filter off. Hides dropped gear whose
+          easiest source mob falls outside the window — vendor, craft and forage
+          items are never hidden, and neither is anything whose mob has no level
+          on the wiki.</div></div>`;
     }
   }
 
@@ -3043,25 +3080,50 @@ function renderZones(){
   if(mc) mc.onclick = () => { state.mobLvlMin = 0; state.mobLvl = 0; render(); };
   const mn = el.querySelector("#mlmin"), mx = el.querySelector("#mlmax");
   if(mn && mx){
-    /* Label tracks the drag; the refilter waits for release, because
-       re-rendering the whole planner per input event fights the gesture —
-       especially on a phone. */
-    mn.oninput = () => el.querySelector("#mlminv").textContent = mn.value;
-    mx.oninput = () => el.querySelector("#mlmaxv").textContent = mx.value || "off";
-    /* Keep the window coherent: dragging one past the other pushes the other
-       along rather than producing an empty range that silently hides
-       everything. */
-    mn.onchange = () => {
+    const fill = el.querySelector("#mlfill");
+    const lo = el.querySelector("#mlminv"), hi = el.querySelector("#mlmaxv");
+
+    const paint = () => {
+      const a = +mn.value, b = +mx.value;
+      fill.style.left  = (a / MOBLVL_MAX * 100) + "%";
+      fill.style.width = ((b - a) / MOBLVL_MAX * 100) + "%";
+      lo.textContent = a;
+      /* Say "any" whenever the window is actually inert — the full span, and
+         also both thumbs parked at 0, which commits to the same off state.
+         Showing "0" there would read as "mobs up to level 0", i.e. nothing. */
+      hi.textContent = (b >= MOBLVL_MAX || b === 0) && a === 0 ? "any" : b;
+      /* Thumb stacking. Both inputs cover the full track, so when the thumbs
+         are close the one painted on top would swallow every grab. Raise
+         whichever thumb the pointer is nearer to — without this, the min
+         handle becomes impossible to pick up once it meets the max. */
+      const mid = MOBLVL_MAX / 2;
+      mn.style.zIndex = (a > mid) ? 4 : 3;
+      mx.style.zIndex = (a > mid) ? 3 : 4;
+    };
+
+    /* Clamp on INPUT, not change: a thumb must not be draggable past its
+       partner even mid-gesture, or the bar visibly crosses itself. */
+    mn.oninput = () => {
+      if(+mn.value > +mx.value) mn.value = mx.value;
+      paint();
+    };
+    mx.oninput = () => {
+      if(+mx.value < +mn.value) mx.value = mn.value;
+      paint();
+    };
+
+    /* Commit on release only — re-rendering the whole planner per input event
+       fights the gesture, especially on a phone. */
+    const commit = () => {
       state.mobLvlMin = +mn.value;
-      if(state.mobLvl && state.mobLvl < state.mobLvlMin) state.mobLvl = state.mobLvlMin;
-      if(!state.mobLvl && state.mobLvlMin) state.mobLvl = 70;   // min implies a window
+      /* Full span = filter off, stored as 0 so the rest of the app has one
+         "no ceiling" representation instead of two. */
+      state.mobLvl = (+mx.value >= MOBLVL_MAX && +mn.value === 0) ? 0 : +mx.value;
       render();
     };
-    mx.onchange = () => {
-      state.mobLvl = +mx.value;
-      if(state.mobLvl && state.mobLvlMin > state.mobLvl) state.mobLvlMin = state.mobLvl;
-      render();
-    };
+    mn.onchange = commit;
+    mx.onchange = commit;
+    paint();
   }
 
   const zb = el.querySelector("#zbtn");
