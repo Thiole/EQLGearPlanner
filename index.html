@@ -1421,11 +1421,13 @@ const NOZONE = "(no drop zone)";
 const zonesOf = i => (i.zones && i.zones.length) ? i.zones : [NOZONE];
 const reindex = () => { normalizeItems(DATA.items); byId = {}; DATA.items.forEach(i => byId[i.id] = i);
   buildSlotIndex();
+  /* Invalidate everything derived BEFORE rebuilding anything, because the
+     rebuilds now depend on each other: buildMobLevelIndex -> questContentLevel
+     -> zoneLevelRange. Clearing _zoneLv afterwards would have left the mob
+     memo describing the previous file's zones. */
   _poolMemo = {};
-  _mobLvMemo = new Map();
-  /* zone level spans are derived from DATA.items + MOBLEVELS — drop the memo
-     so a newly loaded file doesn't get described by the old one's numbers. */
-  _zoneLv = null; };
+  _zoneLv = null;
+  buildMobLevelIndex(); };
 reindex();
 
 /* ---------------- rules engine ---------------- */
@@ -1566,8 +1568,64 @@ function itemMobLevel(i){
   _mobLvMemo.set(i.id, v);
   return v;
 }
+/* Build the whole memo in one pass instead of letting it fill lazily.
+
+   Lazily was costing ~280ms on the FIRST Auto-equip after setting a level
+   window — measured 395ms cold vs 114ms warm — because the first real use of
+   the filter had to walk 6889 items' drop lists before it could answer
+   anything. That is precisely the moment the user is watching a button and
+   deciding the app has hung. Doing it at load time hides the cost behind the
+   fetch that is already happening, and every later interaction is warm. */
+function buildMobLevelIndex(){
+  _mobLvMemo = new Map();
+  if(!_mobLevelCount) return;
+  for(const i of DATA.items) _mobLvMemo.set(i.id, _itemMobLevel(i));
+}
+
+/* ---- quest content level ----
+   A quest reward has no drop mobs of its own, so the drop-based level said
+   nothing about it and it passed every window — which is why Rod of the
+   Protecting Winds turned up in a level 1-35 list despite being a Plane of
+   Sky reward.
+
+   The level comes from QUESTLEVELS, an optional side file the scraper builds
+   by walking each quest's own wiki page: the hardest mob it makes you kill,
+   or the easiest source of the hardest turn-in it makes you farm. That is a
+   real requirement, not an inference from the quest's name — an earlier cut
+   matched zone names inside quest titles and false-positived badly.
+
+   An item on several quests takes the CHEAPEST of them: alternative routes to
+   the same reward mean you only have to do the easiest one. */
+let QUESTLEVELS = {}, QUESTWHY = {};
+
+function questContentLevel(i){
+  let best = null, why = null;
+  for(const q of i.quests || []){
+    const k = String(q).trim().toLowerCase();
+    const lv = QUESTLEVELS[k];
+    if(lv == null) continue;
+    if(best === null || lv < best){ best = lv; why = q; }
+  }
+  return best === null ? null : {level: best, quest: why};
+}
+
+/* The drop half of the rating, on its own so the UI can tell which route
+   produced a level. */
+function dropMobLevel(i){
+  let min = null;
+  for(const d of i.drops || []){
+    const names = (d.mobs && d.mobs.length) ? d.mobs : [d.zone];
+    for(const m of names){
+      const lv = MOBLEVELS[String(m || "").toLowerCase()];
+      if(lv != null && (min === null || lv < min)) min = lv;
+    }
+  }
+  return min;
+}
+
 function _itemMobLevel(i){
-  if(!_mobLevelCount) return null;
+  /* Not gated on _mobLevelCount: questlevels.json is independent, so a deploy
+     with only that file still rates its quest rewards. */
   /* Vendor, craft, and forage routes exempt an item — mob level says nothing
      about whether you can buy it. Quests deliberately do NOT: i.quests lists
      quests the item is PART OF, not quests that award it (the wiki doesn't
@@ -1578,12 +1636,14 @@ function _itemMobLevel(i){
      conservative direction, and the slider tooltip says so. */
   if((i.vendors||[]).length || (i.crafted||[]).length ||
      (i.foraged||[]).length) return null;
-  let min = null;
-  for(const d of i.drops || [])
-    for(const m of d.mobs || []){
-      const lv = MOBLEVELS[String(m).toLowerCase()];
-      if(lv != null && (min === null || lv < min)) min = lv;
-    }
+  const min = dropMobLevel(i);
+  /* No killable source at all — fall back to the quest's content level. Only
+     as a FALLBACK: an item that both drops and is quest-obtainable is still
+     rated by its easiest route, which is the drop. */
+  if(min === null){
+    const q = questContentLevel(i);
+    return q ? q.level : null;
+  }
   /* Unknown ≠ too high. If none of an item's mobs are in the table, the item
      stays visible — a missing row in a side file must never hide gear. */
   return min;
@@ -3085,14 +3145,15 @@ function renderZones(){
   /* Rendered even with no data loaded. Hiding it silently was worse: there was
      no way to tell "this build has no such feature" from "moblevels.json 404'd",
      which is exactly the confusion it caused. */
-  if(!_mobLevelCount){
+  if(!_mobLevelCount && !Object.keys(QUESTLEVELS).length){
     h += `<div class="fbar"><button class="fbtn" id="mlbtn" style="flex:1 1 100%">
       <span style="color:var(--faint)">Mob level · no data</span>
       <span class="cnt">${state.mobOpen?"▴":"▾"}</span></button></div>`;
     if(state.mobOpen)
       h += `<div class="zpanel"><div class="zmore">
-        <b>moblevels.json didn't load.</b> The planner fetches it from the same
-        folder as index.html, alongside items.json. Check that
+        <b>moblevels.json didn't load.</b> The planner fetches it, and the
+        optional questlevels.json, from the same folder as index.html,
+        alongside items.json. Check that
         <code>./moblevels.json</code> is reachable — on GitHub Pages it must be
         committed at the repo root, and the filename is case-sensitive.
         Generate it by running <code>scrape_eqlwiki.py</code>.</div></div>`;
@@ -3466,6 +3527,24 @@ function renderDrawer(){
     /* Shown on all four resonance-capable slots, not just the hands — the flex
        slots are the whole point of the toggle and the place where the choice
        is actually live. */
+    /* Per-item provenance. A derived number shouldn't be silent — if a Sky
+       reward is being rated 46 because of its quest zone rather than a mob it
+       drops from, that reasoning should be visible on the item. */
+    if(state.mobLvl){
+      const lv = itemMobLevel(it);
+      if(lv !== null){
+        /* Ask whether a DROP produced the number, not whether a drops array
+           exists — the empty-mobs case above has entries but may still be
+           rated by its quest. */
+        const dropLv = dropMobLevel(it);
+        const q = dropLv !== null ? null : questContentLevel(it);
+        const why = q && QUESTWHY[String(q.quest).toLowerCase()];
+        h += `<div class="note">Rated <b>level ${lv}</b>${q
+          ? ` by <b>${esc(q.quest)}</b>${why ? ` — hardest requirement is ${esc(why)}` : ""}`
+          : ` by its easiest drop mob`}.</div>`;
+      }
+    }
+
     if(bardInstrOn() && ["PRIMARY","SECONDARY","ANY1","ANY2"].includes(slot)){
       const ok = canHoldResonance(it);
       h += `<div class="note ${ok ? "" : "warn"}">
@@ -3626,7 +3705,10 @@ function renderDrawer(){
      here as a read-only note so the drawer explains its own item count. */
   if(state.mobLvl)
     h += `<div class="note"><b>Mob level ${state.mobLvlMin}–${state.mobLvl}.</b>
-      Dropped gear outside that window is hidden. Change it in the Zones panel.</div>`;
+      Gear outside that window is hidden — by its easiest drop mob, or for a
+      quest reward with no drops, by the hardest kill or turn-in its quest
+      actually requires. Vendor, craft and forage items and anything with no level at all
+      still show. Change the window in the Zones panel.</div>`;
 
   if(state.zones.size)
     h += `<div class="note"><b>Zone filter active:</b> ${[...state.zones].map(esc).join(" · ")}.
@@ -3940,10 +4022,31 @@ async function autoLoadHostedData(){
           for(const [k,v] of Object.entries(j))
             if(typeof v === "number") MOBLEVELS[k.toLowerCase()] = v;
           _mobLevelCount = Object.keys(MOBLEVELS).length;
-          _mobLvMemo = new Map();
-          /* This fetch lands after reindex(), so the memo it cleared was built
-             (or would be built) without levels. Clear it again here. */
+          /* Items are already indexed by now (items.json is fetched first), so
+             the memo can be filled immediately rather than on first use. The
+             zone spans have to go first: they were computed with an empty
+             level table, and the quest fallback reads them. */
           _zoneLv = null;
+                  buildMobLevelIndex();
+        }
+      }
+    }catch(e){ /* absent by design on most deploys */ }
+
+    try{
+      /* Optional too, and independent: quest levels are useful even if the
+         mob table is missing, and vice versa. */
+      const res = await fetch("./questlevels.json");
+      if(res.ok){
+        const j = await res.json();
+        const lv = (j && j.levels) || j;
+        if(lv && typeof lv === "object" && !Array.isArray(lv)){
+          QUESTLEVELS = {};
+          for(const [k,v] of Object.entries(lv))
+            if(typeof v === "number") QUESTLEVELS[k.toLowerCase()] = v;
+          QUESTWHY = (j && j.why) || {};
+          /* The mob memo caches quest-derived levels too, so it has to be
+             rebuilt now that the quest table exists. */
+          buildMobLevelIndex();
         }
       }
     }catch(e){ /* absent by design on most deploys */ }
