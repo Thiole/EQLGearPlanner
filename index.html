@@ -1359,6 +1359,11 @@ let _zoneLv = null;                 // zone -> [minLevel,maxLevel]; see zoneLeve
 /* Declared here, not beside memoPool() below: reindex() clears it and runs at
    load time, which is inside the temporal dead zone of a later `let`. */
 let _poolMemo = {};
+/* Declared up here with the other indexes, not beside their functions below:
+   reindex() clears them and runs at load time, inside the temporal dead zone
+   of any later `let`. */
+let _mobLvMemo = new Map();
+let _mobLevelCount = 0;
 /* Top of the mob-level bar. 70 rather than 65: it's a UI bound, and a bar that
    can't reach the highest mob in the data would quietly exclude it. */
 const MOBLVL_MAX = 70;
@@ -1417,6 +1422,7 @@ const zonesOf = i => (i.zones && i.zones.length) ? i.zones : [NOZONE];
 const reindex = () => { normalizeItems(DATA.items); byId = {}; DATA.items.forEach(i => byId[i.id] = i);
   buildSlotIndex();
   _poolMemo = {};
+  _mobLvMemo = new Map();
   /* zone level spans are derived from DATA.items + MOBLEVELS — drop the memo
      so a newly loaded file doesn't get described by the old one's numbers. */
   _zoneLv = null; };
@@ -1543,9 +1549,25 @@ function effective(entry){
    MINIMUM known level across its drop mobs — the easiest source. A raid dragon
    on the same drop list is irrelevant if trash also drops it. */
 let MOBLEVELS = {};
+/* Object.keys(MOBLEVELS).length inside a per-item predicate is a full walk of
+   the table every time. Keep the count beside it. */
 
+
+/* Memo for itemMobLevel. The answer depends only on the item and MOBLEVELS,
+   neither of which changes while you drag a slider — but the function is
+   called once per item per pool, and there are several pools per render, so
+   without this a single slider commit re-walked every item's drop list a
+   dozen times over. That measured 622ms on desktop, i.e. multiple seconds on
+   a phone. Cleared by reindex() and when moblevels.json lands. */
 function itemMobLevel(i){
-  if(!Object.keys(MOBLEVELS).length) return null;
+  const hit = _mobLvMemo.get(i.id);
+  if(hit !== undefined) return hit;
+  const v = _itemMobLevel(i);
+  _mobLvMemo.set(i.id, v);
+  return v;
+}
+function _itemMobLevel(i){
+  if(!_mobLevelCount) return null;
   /* Vendor, craft, and forage routes exempt an item — mob level says nothing
      about whether you can buy it. Quests deliberately do NOT: i.quests lists
      quests the item is PART OF, not quests that award it (the wiki doesn't
@@ -3060,7 +3082,21 @@ function renderZones(){
      slider over data that doesn't exist would filter nothing and look broken.
      Sits with Zones because both answer "where am I farming", and both are
      global: every slot you open obeys them. */
-  if(Object.keys(MOBLEVELS).length){
+  /* Rendered even with no data loaded. Hiding it silently was worse: there was
+     no way to tell "this build has no such feature" from "moblevels.json 404'd",
+     which is exactly the confusion it caused. */
+  if(!_mobLevelCount){
+    h += `<div class="fbar"><button class="fbtn" id="mlbtn" style="flex:1 1 100%">
+      <span style="color:var(--faint)">Mob level · no data</span>
+      <span class="cnt">${state.mobOpen?"▴":"▾"}</span></button></div>`;
+    if(state.mobOpen)
+      h += `<div class="zpanel"><div class="zmore">
+        <b>moblevels.json didn't load.</b> The planner fetches it from the same
+        folder as index.html, alongside items.json. Check that
+        <code>./moblevels.json</code> is reachable — on GitHub Pages it must be
+        committed at the repo root, and the filename is case-sensitive.
+        Generate it by running <code>scrape_eqlwiki.py</code>.</div></div>`;
+  } else {
     const on = !!state.mobLvl;
     h += `<div class="fbar" style="flex-wrap:wrap;gap:6px">
       <button class="fbtn ${on?"on":""}" id="mlbtn" style="flex:1 1 100%">
@@ -3115,7 +3151,7 @@ function renderZones(){
            zones can still feed it without opening each one. A zone whose mobs
            all sit outside the window is dimmed — not hidden, because you may
            want it anyway for a vendor or quest item. */
-        const r = Object.keys(MOBLEVELS).length ? zoneLevelRange(z) : null;
+        const r = _mobLevelCount ? zoneLevelRange(z) : null;
         const outside = state.mobLvl && r &&
           (r[1] < state.mobLvlMin || r[0] > state.mobLvl);
         return `<button class="zchip ${state.zones.has(z)?"on":""} ${(n && !outside)?"":"dim"}" data-zone="${esc(z)}"
@@ -3903,6 +3939,8 @@ async function autoLoadHostedData(){
           MOBLEVELS = {};
           for(const [k,v] of Object.entries(j))
             if(typeof v === "number") MOBLEVELS[k.toLowerCase()] = v;
+          _mobLevelCount = Object.keys(MOBLEVELS).length;
+          _mobLvMemo = new Map();
           /* This fetch lands after reindex(), so the memo it cleared was built
              (or would be built) without levels. Clear it again here. */
           _zoneLv = null;
