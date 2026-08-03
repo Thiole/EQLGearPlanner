@@ -1322,7 +1322,43 @@ function normalizeItems(items){
 /* ---------------- state ---------------- */
 let DATA = SEED;
 let byId = {};
+
+/* SLOTS is a small array, but fitsSlot() used to SLOTS.find() on every call —
+   and that call sits inside a .filter over the whole item set, so a single
+   slot's candidate list did ~6900 linear scans of it. One map, built once. */
+const SLOT_BY_KEY = {};
+SLOTS.forEach(s => SLOT_BY_KEY[s.k] = s);
+
+/* Items bucketed by anatomical slot ("PRIMARY", "LEGS", ...). Every candidate
+   pool in the app starts by narrowing to one slot, so doing that with a hash
+   lookup instead of a full scan cuts the work by roughly the number of slots —
+   a Legs query touches a few hundred items rather than all 6900. The later
+   filters (era, zone, mob level, class) then run over that smaller set.
+
+   Flex slots are the exception: they legitimately accept everything, so they
+   still get the full array. Nothing is lost — a * slot's pool WAS the whole
+   set before and still is. */
+let bySlot = {};
+function buildSlotIndex(){
+  bySlot = {};
+  for(const i of DATA.items)
+    for(const sl of i.slots || [])
+      (bySlot[sl] ||= []).push(i);
+}
+
+/* The pool for a slot key, pre-narrowed. Replaces
+   `DATA.items.filter(i => fitsSlot(i, k))` at every call site. */
+function slotPool(slotKey){
+  const s = SLOT_BY_KEY[slotKey];
+  if(!s) return [];
+  if(s.a === "*") return DATA.items;             // flex: everything equippable
+  return bySlot[s.a] || [];
+}
+
 let _zoneLv = null;                 // zone -> [minLevel,maxLevel]; see zoneLevelRange
+/* Declared here, not beside memoPool() below: reindex() clears it and runs at
+   load time, which is inside the temporal dead zone of a later `let`. */
+let _poolMemo = {};
 /* Top of the mob-level bar. 70 rather than 65: it's a UI bound, and a bar that
    can't reach the highest mob in the data would quietly exclude it. */
 const MOBLVL_MAX = 70;
@@ -1379,6 +1415,8 @@ const state = {
 const NOZONE = "(no drop zone)";
 const zonesOf = i => (i.zones && i.zones.length) ? i.zones : [NOZONE];
 const reindex = () => { normalizeItems(DATA.items); byId = {}; DATA.items.forEach(i => byId[i.id] = i);
+  buildSlotIndex();
+  _poolMemo = {};
   /* zone level spans are derived from DATA.items + MOBLEVELS — drop the memo
      so a newly loaded file doesn't get described by the old one's numbers. */
   _zoneLv = null; };
@@ -1562,7 +1600,7 @@ function zoneLevelRange(zone){
 }
 
 function fitsSlot(item, slotKey){
-  const s = SLOTS.find(x => x.k === slotKey);
+  const s = SLOT_BY_KEY[slotKey];
   if(!s) return false;
   if(s.a === "*") return true;                   // Any slot takes anything equippable
   return item.slots.includes(s.a);
@@ -2071,7 +2109,7 @@ function bisCandidates(slotKey, taken = new Set(), opts = {}){
   })();
   if(twoHandUp) return [];
 
-  let pool = DATA.items.filter(i => fitsSlot(i, slotKey));
+  let pool = slotPool(slotKey);
   if(state.inEra)      pool = pool.filter(i => !outOfEra(i) && !supersededVersion(i));
   if(state.src.size)   pool = pool.filter(i => (i.source||[]).some(s => state.src.has(s)));
   if(state.mobLvl)     pool = pool.filter(passesMobLevel);
@@ -2324,6 +2362,9 @@ const isSummoned = i => (i.tags || []).includes("TEMPORARY") ||
                         /^summoned\b/i.test(i.name || "");
 
 function exaltPool(){
+  return memoPool("exalt", _exaltPool);
+}
+function _exaltPool(){
   let pool = DATA.items.filter(i => !isSummoned(i));
   if(state.inEra)      pool = pool.filter(i => !outOfEra(i) && !supersededVersion(i));
   if(state.src.size)   pool = pool.filter(i => (i.source||[]).some(s => state.src.has(s)));
@@ -2976,7 +3017,24 @@ function renderZoneSum(){
    gear comes out of this zone", not "how much of it fits the slot I happen to
    be looking at". Era, source and class/race still apply, since those really
    do change what's on the table. */
+/* globalZoneCounts and exaltPool both filter the FULL item set, and both are
+   called on every render — the zone panel redraws whenever anything changes.
+   Neither depends on the slot, so the result is the same until one of the
+   global filters moves. Key the memo on exactly those inputs; anything not in
+   the key (equipped gear, open panels, sort order) can't change the answer. */
+const poolKey = () => [state.era, state.inEra, [...state.src].sort().join(","),
+  state.mobLvlMin, state.mobLvl, [...state.zones].sort().join(","),
+  state.classes.join(","), state.race, DATA.items.length].join("|");
+const memoPool = (name, build) => {
+  const k = poolKey();
+  if(_poolMemo.k !== k) _poolMemo = {k};      // any change invalidates all
+  return _poolMemo[name] ||= build();
+};
+
 function globalZoneCounts(){
+  return memoPool("zoneCounts", _globalZoneCounts);
+}
+function _globalZoneCounts(){
   const act = active(), c = {};
   let pool = DATA.items;
   if(state.inEra)    pool = pool.filter(i => !outOfEra(i) && !supersededVersion(i));
@@ -3466,7 +3524,7 @@ function renderDrawer(){
   /* --- gear list for an empty slot --- */
   document.getElementById("dtitle").textContent = sdef.n + (sdef.a === "*" ? " (flex)" : "");
   const act = active();
-  let pool = DATA.items.filter(i => fitsSlot(i, slot));
+  let pool = slotPool(slot);
   const hiddenEra = state.inEra ? pool.filter(i => outOfEra(i) || supersededVersion(i)).length : 0;
   if(state.inEra) pool = pool.filter(i => !outOfEra(i) && !supersededVersion(i));
   if(state.q) pool = pool.filter(i =>
