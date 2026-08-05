@@ -1110,9 +1110,7 @@ const CURRENT_ERA = "Sky Era";
    not when they were introduced — so they correctly disappear if you rewind
    the dropdown to a genuinely earlier era. */
 const ERA_OVERRIDE = {};
-for(const n of ["Fist of Lightning","Flowing Red Silk Sash","Leech Husk Tunic",
-    "Mantle of Fire","Mucilaginous Girdle","Sash of the Dragonborn",
-    "Scaled Prowler Belt","Scaled Wolf Hide Belt"]) ERA_OVERRIDE[n] = CURRENT_ERA;
+for(const n of [""]) ERA_OVERRIDE[n] = CURRENT_ERA;
 
 /* ~30% of wiki item pages carry no Era category at all (Shield of the
    Protector, a Temple of Veeshan drop, is the canonical example — the wiki
